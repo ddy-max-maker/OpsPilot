@@ -421,6 +421,8 @@ async function loadIncidentDetail(incidentId) {
   }
   const canAcknowledge = incident.status === "open" &&
     (me.roles.includes("operator") || me.roles.includes("approver") || me.roles.includes("admin"));
+  const canInvestigate = me.roles.includes("operator") || me.roles.includes("approver") || me.roles.includes("admin");
+  const runnable = incident.status !== "open" && incident.status !== "closed" && incident.status !== "resolved";
   const transitions = {
     open: "acknowledged / needs_human",
     acknowledged: "investigating",
@@ -458,8 +460,10 @@ async function loadIncidentDetail(incidentId) {
           : incident.status === "open"
             ? '<span class="badge muted">当前角色无法确认故障（需要 operator/approver/admin）</span>'
             : ""}
+        ${canInvestigate && runnable ? '<button id="start-run-btn" class="btn" style="margin-left:8px">启动智能诊断</button>' : ""}
       </div>
-    </div>`;
+    </div>
+    <div id="run-panel"></div>`;
   const ackBtn = document.getElementById("ack-btn");
   if (ackBtn) {
     ackBtn.addEventListener("click", async () => {
@@ -473,6 +477,183 @@ async function loadIncidentDetail(incidentId) {
         ackBtn.disabled = false;
       }
     });
+  }
+  const startBtn = document.getElementById("start-run-btn");
+  if (startBtn) {
+    startBtn.addEventListener("click", async () => {
+      startBtn.disabled = true;
+      try {
+        const data = await api(`/incidents/${encodeURIComponent(incidentId)}/investigations`, {
+          method: "POST",
+          headers: { "Idempotency-Key": crypto.randomUUID() },
+          body: {},
+        });
+        toast("诊断已受理：" + data.run_id);
+        localStorage.setItem("opspilot_run_" + incidentId, data.run_id);
+        renderRunPanel(incidentId, data.run_id);
+      } catch (err) {
+        showError(err);
+        startBtn.disabled = false;
+      }
+    });
+    // 页面重开时恢复最近一次 run 面板
+    const savedRun = localStorage.getItem("opspilot_run_" + incidentId);
+    if (savedRun) {
+      renderRunPanel(incidentId, savedRun);
+    }
+  }
+}
+
+// ---- 诊断运行面板（轮询状态 + 事件 + 证据 + 报告）----
+
+const RUN_TERMINAL = new Set(["completed", "needs_human", "failed", "canceled"]);
+let runPollTimer = null;
+
+function renderRunPanel(incidentId, runId) {
+  const panel = document.getElementById("run-panel");
+  if (!panel) return;
+  if (runPollTimer) clearInterval(runPollTimer);
+  panel.innerHTML = `
+    <div class="panel">
+      <div class="page-head" style="margin-bottom:8px">
+        <h1 style="font-size:16px">智能诊断 <span class="mono">${esc(runId.slice(0, 14))}…</span></h1>
+        <button id="close-run-btn" class="btn ghost">收起</button>
+      </div>
+      <div id="run-status">加载中…</div>
+      <div style="margin:10px 0">
+        <button id="show-events-btn" class="btn ghost">工具调用过程</button>
+        <button id="show-evidence-btn" class="btn ghost">证据</button>
+        <button id="show-report-btn" class="btn ghost">诊断报告</button>
+        <button id="cancel-run-btn" class="btn danger">取消</button>
+      </div>
+      <div id="run-detail"></div>
+    </div>`;
+  document.getElementById("close-run-btn").addEventListener("click", () => {
+    if (runPollTimer) clearInterval(runPollTimer);
+    panel.innerHTML = "";
+  });
+  document.getElementById("show-events-btn").addEventListener("click", () => showRunEvents(runId));
+  document.getElementById("show-evidence-btn").addEventListener("click", () => showRunEvidence(runId));
+  document.getElementById("show-report-btn").addEventListener("click", () => showRunReport(runId));
+  document.getElementById("cancel-run-btn").addEventListener("click", async () => {
+    try {
+      await api(`/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+      toast("已请求取消");
+      pollRunStatus(incidentId, runId);
+    } catch (err) {
+      showError(err);
+    }
+  });
+  pollRunStatus(incidentId, runId);
+}
+
+async function pollRunStatus(incidentId, runId) {
+  const box = document.getElementById("run-status");
+  if (!box) return;
+  try {
+    const run = await api("/runs/" + encodeURIComponent(runId));
+    const usage = run.usage || {};
+    box.innerHTML = `
+      <dl class="detail-grid">
+        <dt>状态</dt><dd>${statusBadge(run.status)}${run.cancel_requested ? ' <span class="badge orange">取消请求中</span>' : ""}</dd>
+        <dt>停止原因</dt><dd>${esc(run.stop_reason || "-")}</dd>
+        <dt>用量</dt><dd>工具调用 ${usage.tool_calls_used ?? 0} · 迭代 ${usage.iterations_used ?? 0} · tokens ${usage.tokens_in ?? 0}/${usage.tokens_out ?? 0}</dd>
+        <dt>预算</dt><dd class="mono">${esc(JSON.stringify(run.budgets || {}).slice(0, 160))}</dd>
+        <dt>模型</dt><dd class="mono">${esc((run.model_config_snapshot || {}).provider || "")}/${esc((run.model_config_snapshot || {}).model_name || "")}（prompt ${(run.model_config_snapshot || {}).prompt_version || ""}）</dd>
+      </dl>`;
+    if (!RUN_TERMINAL.has(run.status)) {
+      runPollTimer = setTimeout(() => pollRunStatus(incidentId, runId), 2000);
+    }
+  } catch (err) {
+    box.innerHTML = `<div class="error-text">状态查询失败：${esc(err.message)}</div>`;
+  }
+}
+
+const EVENT_TYPE_BADGE = {
+  run_started: "blue", tool_called: "orange", tool_returned: "orange",
+  evidence_added: "green", hypothesis_added: "blue", budget_warning: "red",
+  error: "red", run_finished: "gray",
+};
+
+async function showRunEvents(runId) {
+  const box = document.getElementById("run-detail");
+  box.innerHTML = `<div class="empty">加载中…</div>`;
+  try {
+    const data = await api(`/runs/${encodeURIComponent(runId)}/events?after_seq=0&limit=200`);
+    box.innerHTML = `
+      <table>
+        <thead><tr><th>seq</th><th>类型</th><th>内容</th><th>时间</th></tr></thead>
+        <tbody>
+          ${data.items.map((e) => `
+            <tr>
+              <td>${e.seq}</td>
+              <td><span class="badge ${EVENT_TYPE_BADGE[e.type] || "muted"}">${esc(e.type)}</span></td>
+              <td class="mono" style="max-width:480px;overflow-wrap:anywhere">${esc(JSON.stringify(e.payload))}</td>
+              <td>${fmtTime(e.created_at)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+      ${data.has_more ? '<div class="empty">事件未完，后续批次从命令行/API 查看</div>' : ""}`;
+  } catch (err) {
+    box.innerHTML = `<div class="error-text">${esc(err.message)}</div>`;
+  }
+}
+
+async function showRunEvidence(runId) {
+  const box = document.getElementById("run-detail");
+  box.innerHTML = `<div class="empty">加载中…</div>`;
+  try {
+    const data = await api(`/runs/${encodeURIComponent(runId)}/evidence?limit=200`);
+    if (!data.items.length) {
+      box.innerHTML = `<div class="empty">暂无证据</div>`;
+      return;
+    }
+    box.innerHTML = `
+      <table>
+        <thead><tr><th>Evidence ID</th><th>来源</th><th>状态</th><th>摘要（脱敏）</th><th>时间</th></tr></thead>
+        <tbody>
+          ${data.items.map((e) => `
+            <tr>
+              <td class="mono">${esc(e.id.slice(0, 14))}…</td>
+              <td>${esc(e.collector)}</td>
+              <td><span class="badge ${e.status === "ok" ? "green" : "red"}">${esc(e.status)}</span>${e.truncated ? ' <span class="badge muted">截断</span>' : ""}</td>
+              <td style="max-width:420px;overflow-wrap:anywhere">${esc(e.summary_redacted)}</td>
+              <td>${fmtTime(e.observed_at)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  } catch (err) {
+    box.innerHTML = `<div class="error-text">${esc(err.message)}</div>`;
+  }
+}
+
+async function showRunReport(runId) {
+  const box = document.getElementById("run-detail");
+  box.innerHTML = `<div class="empty">加载中…</div>`;
+  try {
+    const r = await api(`/runs/${encodeURIComponent(runId)}/report`);
+    box.innerHTML = `
+      <dl class="detail-grid">
+        <dt>报告版本</dt><dd>v${r.version_no}（${esc(r.status)}）</dd>
+        <dt>故障概述</dt><dd style="white-space:pre-wrap">${esc(r.conclusion.summary || "-")}</dd>
+        <dt>关键发现</dt><dd>
+          ${(r.conclusion.key_findings || []).map((f) => `
+            <div style="margin-bottom:6px">• ${esc(f.finding)}
+              <span class="mono">[${(f.evidence_ids || []).map((id) => esc(id.slice(0, 12)) + "…").join(", ")}]</span></div>`).join("") || "-"}
+        </dd>
+        <dt>候选根因</dt><dd>
+          ${(r.hypotheses || []).map((h) => `
+            <div style="margin-bottom:6px">#${h.rank} <span class="badge ${h.status === "supported" ? "green" : h.status === "refuted" ? "red" : "muted"}">${esc(h.status)}</span>
+              ${esc(h.statement)} <span class="mono">[${h.supporting_evidence_ids.map((id) => esc(id.slice(0, 12)) + "…").join(", ")}]</span></div>`).join("") || "-"}
+        </dd>
+        <dt>未知说明</dt><dd>${r.unknown_note && r.unknown_note.is_unknown
+          ? '<span class="badge red">is_unknown</span> ' + esc(r.unknown_note.reason || "")
+          : '<span class="badge green">结论有证据支撑</span>'}</dd>
+        <dt>人工处置建议</dt><dd>${(r.conclusion.next_manual_steps || []).map((s) => `• ${esc(s)}`).join("<br/>") || "-"}</dd>
+        <dt>生成器</dt><dd class="mono">${esc(JSON.stringify(r.generator || {}))}</dd>
+      </dl>`;
+  } catch (err) {
+    box.innerHTML = `<div class="error-text">${esc(err.message)}</div>`;
   }
 }
 

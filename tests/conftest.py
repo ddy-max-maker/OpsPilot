@@ -13,14 +13,23 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+# Windows 默认 ProactorEventLoop 不支持 psycopg（worker checkpoint 池）异步模式；
+# 统一切换 SelectorEventLoop（asyncpg/httpx 兼容）。
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # ---- 1. 先设置测试环境变量（必须在导入 app 之前）----
+# 注意：用 127.0.0.1 而非 localhost——本机存在两个 PostgreSQL（Docker 容器 0.0.0.0:5432
+# 与本地服务 [::1]:5432），localhost 的 ::1 优先解析会连到本地服务，导致
+# truncate 与应用各连一个库。127.0.0.1 强制走 Docker 容器。
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEST_DB_NAME = "opspilot_test"
-PG_SERVER_URL = "postgresql+asyncpg://opspilot:opspilot@localhost:5432/postgres"
-TEST_DATABASE_URL = f"postgresql+asyncpg://opspilot:opspilot@localhost:5432/{TEST_DB_NAME}"
+PG_SERVER_URL = "postgresql+asyncpg://opspilot:opspilot@127.0.0.1:5432/postgres"
+TEST_DATABASE_URL = f"postgresql+asyncpg://opspilot:opspilot@127.0.0.1:5432/{TEST_DB_NAME}"
 ADMIN_BOOT_USERNAME = "admin"
 ADMIN_BOOT_PASSWORD = "AdminBoot123!"
 
@@ -49,7 +58,9 @@ from app.models import AssetAccessPolicy, Role, User, UserRole  # noqa: E402
 
 ALL_TABLES = (
     "users, roles, user_roles, asset_access_policies, assets, asset_edges, "
-    "incidents, alerts, audit_events, api_idempotency_keys, outbox_events"
+    "incidents, alerts, audit_events, api_idempotency_keys, outbox_events, "
+    "investigation_runs, run_events, evidence, hypotheses, diagnostic_reports, "
+    "connector_types, connector_instances, secret_refs"
 )
 
 
@@ -99,11 +110,35 @@ async def db_session(db_session_factory) -> AsyncIterator[AsyncSession]:
         yield session
 
 
+async def truncate_all(engine) -> None:
+    """清空全部业务表与 checkpoint（供 seed 夹具在插入前确定性调用）。
+
+    注意：业务表 TRUNCATE 与 langgraph checkpoint 清理必须分事务——
+    checkpoint 表由 checkpointer.setup() 创建（不属于 Alembic 迁移），在尚未
+    建表的库上 DELETE 会报 undefined_table；若与 TRUNCATE 同事务，错误被吞掉后
+    事务仍处于 aborted 状态，COMMIT 失败导致整体回滚、TRUNCATE 失效（脏数据
+    跨测试存活）。此处先探测表存在，避免错误路径。
+    """
+    async with engine.begin() as conn:
+        await conn.execute(text(f"TRUNCATE TABLE {ALL_TABLES} RESTART IDENTITY CASCADE"))
+    async with engine.begin() as conn:
+        for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+            exists = await conn.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n "
+                    "ON n.oid = c.relnamespace WHERE n.nspname = 'langgraph' "
+                    "AND c.relname = :t)"
+                ),
+                {"t": table},
+            )
+            if exists:
+                await conn.execute(text(f"DELETE FROM langgraph.{table}"))
+
+
 @pytest.fixture
 async def clean_db(db_engine) -> None:
     """清空全部业务表（保留 schema）；必须先于 app bootstrap 生效。"""
-    async with db_engine.begin() as conn:
-        await conn.execute(text(f"TRUNCATE TABLE {ALL_TABLES} RESTART IDENTITY CASCADE"))
+    await truncate_all(db_engine)
 
 
 @pytest.fixture

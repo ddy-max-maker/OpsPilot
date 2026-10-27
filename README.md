@@ -2,17 +2,19 @@
 
 企业级智能运维故障诊断与受控恢复平台（全新实现，不迁移旧 OpsPilot 代码）。
 
-当前仓库状态：**D1-B 完成**（在 D1-A 基础上新增：故障事件管理、告警 Webhook 接入、
-API 幂等、最小 Web 控制台、GitHub CI）。不含 AI Agent / Worker / RAG / RabbitMQ /
-Action Service（见 docs/IMPLEMENTATION_PLAN.md 的 D2 及后续阶段）。
+当前仓库状态：**D2 完成**（DeepAgents 智能故障诊断：AgentRuntime + Tool Gateway +
+ops-worker + 真实故障演示环境 + 诊断报告）。D1-A/D1-B 能力全部保留；
+不含 RAG / RabbitMQ / MCP / Action Service / 自动修复（见 docs/IMPLEMENTATION_PLAN.md 的 D3 及后续阶段）。
 
 ## 技术栈
 
 - Python 3.12 + FastAPI + Pydantic v2 + SQLAlchemy 2 (async) + Alembic
 - PostgreSQL 16（真实外键/唯一约束/索引，迁移管理，禁用 create_all）
+- **DeepAgents 0.7.32 + LangGraph 1.2.18 + LangChain 1.4.7**（D2 智能诊断执行核心，ADR-D2）
+- PostgreSQL Checkpointer（`langgraph` 独立 schema，thread_id = run_id）
 - uv 管理依赖与虚拟环境；Ruff / mypy / pytest 保证工程质量
 - JWT Access Token（30 分钟，无 Refresh Token）+ argon2 密码哈希
-- Docker Compose：一键启动 PostgreSQL 与 API
+- Docker Compose：一键启动 PostgreSQL、API、Web、ops-worker、docker-ro-proxy 与演示环境
 
 ## 快速开始
 
@@ -32,7 +34,7 @@ curl http://localhost:8000/api/v1/health/live
 curl http://localhost:8000/api/v1/health/ready
 ```
 
-Web 控制台：<http://localhost:8080>（登录 → 资产管理 → 故障事件 → 创建/确认 → 审计日志）。
+Web 控制台：<http://localhost:8080>（登录 → 资产管理 → 故障事件 → 创建/确认 → 启动诊断 → 审计日志）。
 
 登录（首次登录强制改密）：
 
@@ -42,6 +44,51 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
   -d '{"username": "admin", "password": "<.env 中引导密码>"}'
 # 用返回的 access token 调用 POST /api/v1/auth/change-password 修改密码
 ```
+
+## D2 智能诊断（DeepAgents）
+
+架构决策见 `docs/ADR-D2-EXECUTION-CORE.md`：**单一执行核心** = DeepAgents 内置
+规划/工具/取证循环（不手写重复 ReAct 图）；业务侧 AgentRuntime 通过
+`astream(stream_mode="updates")` 步进驱动，在 super-step 间强制执行
+取消 / deadline / 迭代 / Token 预算（服务端硬限制，Prompt 无法绕过）。
+框架内部消息对象不外泄领域层；DeepAgents 内置 `execute` 工具与通用 subagent
+已通过 HarnessProfile 裁剪，文件操作隔离于 graph state 虚拟 FS。
+
+```bash
+# 1. 启动全部服务（含 worker 与只读 Docker 代理）
+docker compose up --build -d
+docker compose --profile demo up -d        # 演示故障环境（demo-app / demo-redis / demo-gateway）
+
+# 2. 写入连接器/资产/拓扑（幂等）
+uv run python scripts/seed_demo.py
+
+# 3. 故障注入（S1 Redis 不可达 / S2 容器退出 / S4 网关 502）与恢复
+powershell -File scripts/demo/faults.ps1 inject S1
+powershell -File scripts/demo/faults.ps1 status S1
+powershell -File scripts/demo/faults.ps1 recover S1
+
+# 4. 端到端诊断：建事件 → 确认 → 创建 Run → 轮询 → 证据/报告
+uv run python scripts/run_scenario.py S1
+```
+
+模型 Provider 经环境变量配置（`AGENT_PROVIDER`：fake | anthropic | google，
+API Key 通过 `AGENT_API_KEY_ENV` 间接引用，密钥不入代码）。`fake` 为确定性
+脚本模型（测试/演示）；真实模型验收需提供凭据后单独执行（不进 CI）。
+
+### D2 关键接口
+
+| 方法与路径 | 说明 |
+|---|---|
+| `POST /api/v1/incidents/{id}/investigations` | 创建诊断 Run（幂等键可选；202） |
+| `GET /api/v1/investigation-runs/{id}` | Run 状态（status/stop_reason/usage/budgets） |
+| `GET /api/v1/investigation-runs/{id}/events` | 诊断事件流（`after_seq` 增量分页轮询） |
+| `POST /api/v1/investigation-runs/{id}/cancel` | 取消运行（合作式 + 服务端强制终止） |
+| `GET /api/v1/investigation-runs/{id}/evidence` | 证据列表（脱敏 payload + 引用） |
+| `GET /api/v1/investigation-runs/{id}/report` | 结构化诊断报告（最新版本快照） |
+
+Worker（`entrypoints/worker.py`）以 PostgreSQL 任务认领运行：
+`SELECT FOR UPDATE SKIP LOCKED` + 租约心跳 + `lease_owner`/`fence_token` fencing
+（旧 Worker 失效后禁止回写）；业务状态以 PostgreSQL 为权威，Checkpoint 仅用于图执行恢复。
 
 ## 演示（D1-B 链路）
 
@@ -123,7 +170,7 @@ OpsPilot-Next/
 ├── app/
 │   ├── main.py               # FastAPI 应用工厂 + lifespan（引擎初始化/bootstrap）
 │   ├── core/                 # 配置、DB Session、安全（JWT/argon2）、错误、响应包裹、分页
-│   ├── models/               # SQLAlchemy 2 模型（D1 全部 11 张表）
+│   ├── models/               # SQLAlchemy 2 模型（D1 11 张 + D2 诊断域 7 张表）
 │   ├── domains/
 │   │   ├── auth/             # 登录/改密/Admin 引导（repository + service + schemas）
 │   │   ├── access/           # RBAC 与资产范围判定（纯函数 scope.py）
@@ -131,17 +178,23 @@ OpsPilot-Next/
 │   │   ├── incidents/        # 故障事件（冻结状态机 state_machine.py + CRUD/acknowledge）
 │   │   ├── alerts/           # 告警 Webhook 接入（HMAC 验签/去重/建单映射）
 │   │   ├── idempotency/      # API 幂等（(user, endpoint, key) 隔离、事务内抢占）
-│   │   └── audit/            # 审计事件写入与查询
+│   │   ├── audit/            # 审计事件写入与查询
+│   │   ├── runs/             # D2：InvestigationRun 创建/取消/查询（DB 为业务权威）
+│   │   ├── tools/            # D2：Tool Gateway + manifest + 连接器 + 脱敏
+│   │   └── agent/            # D2：AgentRuntime/Provider/Fake 模型/Prompts（ADR-D2）
+│   ├── worker/               # D2：DB 认领（SKIP LOCKED）+ 租约心跳 + fence_token fencing
 │   └── api/
 │       ├── deps.py           # Session/当前用户/RBAC/范围依赖注入
-│       └── v1/               # /api/v1 路由（auth / assets / incidents / webhooks / audit / health）
-├── entrypoints/              # 单仓三入口约定：api（D1）/ worker（D2 预留）/ action（D5 预留）
-├── web/                      # 最小 Web 控制台（nginx:1.27-alpine + 原生 JS，真实调 API）
-├── scripts/                  # seed.py（演示资产）、simulate_alert.py（签名告警模拟）
-├── .github/workflows/ci.yml  # CI：Ruff + mypy + pytest（真实 PG）+ Alembic 空库演练
-├── alembic/                  # 迁移脚本（async env.py，D1 初始迁移）
-├── tests/                    # 单元测试 + 真实 PostgreSQL 集成测试
-├── docker-compose.yml        # postgres + api + web
+│       └── v1/               # /api/v1 路由（auth / assets / incidents / webhooks / audit / runs / health）
+├── entrypoints/              # 单仓三入口：api / worker（D2 ops-worker）/ action（D5 预留）
+├── roproxy/                  # D2：docker-ro-proxy（Docker Engine API 方法+路径白名单，只读）
+├── demo/                     # D2：演示故障环境（demo-app / gateway.conf / crasher.py）
+├── web/                      # 最小 Web 控制台（nginx:1.27-alpine + 原生 JS，真实调 API；含诊断入口）
+├── scripts/                  # seed.py / simulate_alert.py / seed_demo.py / run_scenario.py / demo/faults.ps1
+├── .github/workflows/ci.yml  # CI：Ruff + mypy + pytest（真实 PG）+ Alembic 空库演练（D2 表校验）
+├── alembic/                  # 迁移脚本（async env.py；0001 初始 + 0002 D2 诊断域）
+├── tests/                    # 单元测试 + 真实 PostgreSQL 集成测试（含 worker/gateway/roproxy/迁移演练）
+├── docker-compose.yml        # postgres + api + web + worker + docker-ro-proxy + demo(profile)
 └── pyproject.toml            # uv/依赖/Ruff/mypy/pytest 配置
 ```
 

@@ -100,3 +100,91 @@ class OutboxStatus(StrEnum):
     PENDING = "pending"
     DISPATCHED = "dispatched"
     FAILED = "failed"
+
+
+# ---- D2：诊断运行（CONTRACTS §2.4–§2.7 / §2.16）----
+
+
+class RunStatus(StrEnum):
+    CREATED = "created"
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    WAITING_APPROVAL = "waiting_approval"
+    NEEDS_HUMAN = "needs_human"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+RUN_TERMINAL_STATUSES = frozenset(
+    {RunStatus.COMPLETED, RunStatus.NEEDS_HUMAN, RunStatus.FAILED, RunStatus.CANCELED}
+)
+
+
+class RunStopReason(StrEnum):
+    COMPLETED = "completed"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    NO_NEW_EVIDENCE = "no_new_evidence"
+    UNKNOWN_EXIT = "unknown_exit"
+    CANCELED = "canceled"
+    ERROR = "error"
+
+
+class RunEventType(StrEnum):
+    RUN_STARTED = "run_started"
+    NODE_ENTERED = "node_entered"
+    NODE_EXITED = "node_exited"
+    TOOL_CALLED = "tool_called"
+    TOOL_RETURNED = "tool_returned"
+    EVIDENCE_ADDED = "evidence_added"
+    HYPOTHESIS_ADDED = "hypothesis_added"
+    BUDGET_WARNING = "budget_warning"
+    ERROR = "error"
+    RUN_FINISHED = "run_finished"
+
+
+class EvidenceSourceType(StrEnum):
+    METRIC = "metric"
+    LOG = "log"
+    TRACE = "trace"
+    HEALTH = "health"
+    INFRA = "infra"
+    KNOWLEDGE = "knowledge"
+
+
+class EvidenceStatus(StrEnum):
+    OK = "ok"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+    UNAVAILABLE = "unavailable"
+
+
+class HypothesisStatus(StrEnum):
+    CANDIDATE = "candidate"
+    SUPPORTED = "supported"
+    REFUTED = "refuted"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class Confidence(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class ReportStatus(StrEnum):
+    FINAL = "final"
+    AMENDED = "amended"
+
+
+class ConnectorInstanceStatus(StrEnum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+
+
+class AgentProvider(StrEnum):
+    """模型 Provider（IMPLEMENTATION_PLAN §4#6：部署期锁定一个支持工具调用的模型）。"""
+
+    FAKE = "fake"
+    ANTHROPIC = "anthropic"
+    GOOGLE = "google"

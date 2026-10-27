@@ -14,6 +14,10 @@ dependencies = [
     "alembic>=1.14.0",
     "pyjwt>=2.10.0",
     "argon2-cffi>=23.1.0",
+    "deepagents>=0.7.32",
+    "langgraph-checkpoint-postgres>=2",
+    "redis>=8.1.0",
+    "psycopg[binary]>=3.3.6",
 ]
 
 [dependency-groups]
@@ -72,3 +76,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: 真实外部依赖测试（真实模型等；CI 可跳过）",
+]

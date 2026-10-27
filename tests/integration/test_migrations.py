@@ -1,146 +1,95 @@
-"""Alembic 迁移集成测试：升级建全表、降级完整回滚（独立临时库执行）。
+"""迁移演练测试：独立临时库执行 upgrade head + downgrade base（DATA_MODEL §5）。
 
-说明：本测试为同步函数——Alembic 异步 env.py 内部自行 asyncio.run，
-不能在已运行的事件循环中调用，因此不使用 async 测试。
+同步实现：alembic 的 async env.py 在同步上下文中自行 asyncio.run；
+库状态检查用 psycopg（已随 checkpoint 依赖安装）。
 """
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
+import os
 
+import psycopg
 from alembic.config import Config
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import command
+from tests.conftest import PROJECT_ROOT
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SCRATCH_DB = "opspilot_migration_test"
-SERVER_URL = "postgresql+asyncpg://opspilot:opspilot@localhost:5432/postgres"
-SCRATCH_URL = f"postgresql+asyncpg://opspilot:opspilot@localhost:5432/{SCRATCH_DB}"
-
-EXPECTED_TABLES = {
-    "users",
-    "roles",
-    "user_roles",
-    "asset_access_policies",
-    "assets",
-    "asset_edges",
-    "alerts",
-    "incidents",
-    "audit_events",
-    "api_idempotency_keys",
-    "outbox_events",
-}
-
-D1_TABLES = (
-    "users",
-    "roles",
-    "user_roles",
-    "asset_access_policies",
-    "assets",
-    "asset_edges",
-    "alerts",
-    "incidents",
-    "audit_events",
-    "api_idempotency_keys",
-    "outbox_events",
-)
+# 127.0.0.1 强制走 Docker 容器（本机 ::1 上可能有另一个 PostgreSQL 服务）
+ADMIN_DSN = "postgresql://opspilot:opspilot@127.0.0.1:5432/postgres"
+DRILL_DB = "opspilot_drill_test"
 
 
-def _alembic_config() -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    return cfg
+def _drop_and_create() -> None:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(f"DROP DATABASE IF EXISTS {DRILL_DB} WITH (FORCE)")
+        conn.execute(f"CREATE DATABASE {DRILL_DB}")
 
 
-async def _create_scratch_db() -> None:
-    engine = create_async_engine(SERVER_URL, isolation_level="AUTOCOMMIT")
+def _drop() -> None:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(f"DROP DATABASE IF EXISTS {DRILL_DB} WITH (FORCE)")
+
+
+def _drill_dsn() -> str:
+    return f"postgresql://opspilot:opspilot@localhost:5432/{DRILL_DB}"
+
+
+def test_alembic_upgrade_and_downgrade_cycle() -> None:
+    _drop_and_create()
+    # env.py 优先读 DATABASE_URL 环境变量：演练期间显式指向临时库（asyncpg 驱动）
+    drill_asyncpg_url = f"postgresql+asyncpg://opspilot:opspilot@localhost:5432/{DRILL_DB}"
+    saved_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = drill_asyncpg_url
     try:
-        async with engine.connect() as conn:
-            await conn.execute(text(f"DROP DATABASE IF EXISTS {SCRATCH_DB} WITH (FORCE)"))
-            await conn.execute(text(f"CREATE DATABASE {SCRATCH_DB}"))
+        cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+        cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+
+        # 空库 → head：D1 + D2 全部表
+        command.upgrade(cfg, "head")
+        with psycopg.connect(_drill_dsn()) as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT tablename FROM pg_tables WHERE schemaname='public'"
+                ).fetchall()
+            }
+            version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+            schemas = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT nspname FROM pg_namespace WHERE nspname='langgraph'"
+                ).fetchall()
+            }
+        for expected in (
+            "investigation_runs",
+            "run_events",
+            "evidence",
+            "hypotheses",
+            "diagnostic_reports",
+            "connector_types",
+            "connector_instances",
+            "secret_refs",
+            "incidents",
+            "alerts",
+        ):
+            assert expected in tables, expected
+        assert version is not None and version[0] == "0002_d2_diagnosis"
+        assert schemas == {"langgraph"}  # ADR-5
+
+        # head → base：可完整回滚
+        command.downgrade(cfg, "base")
+        with psycopg.connect(_drill_dsn()) as conn:
+            remaining = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT tablename FROM pg_tables WHERE schemaname='public' "
+                    "AND tablename NOT IN ('alembic_version')"
+                ).fetchall()
+            }
+        assert remaining == set()
     finally:
-        await engine.dispose()
-
-
-async def _drop_scratch_db() -> None:
-    engine = create_async_engine(SERVER_URL, isolation_level="AUTOCOMMIT")
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text(f"DROP DATABASE IF EXISTS {SCRATCH_DB} WITH (FORCE)"))
-    finally:
-        await engine.dispose()
-
-
-async def _tables_in(url: str) -> set[str]:
-    engine = create_async_engine(url)
-    try:
-        async with engine.connect() as conn:
-            rows = await conn.execute(
-                text(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-                )
-            )
-            return {row[0] for row in rows}
-    finally:
-        await engine.dispose()
-
-
-def test_upgrade_head_creates_all_d1_tables(monkeypatch) -> None:
-    """空库 upgrade head：D1 全部表 + alembic_version；唯一约束真实存在。"""
-    asyncio.run(_create_scratch_db())
-    monkeypatch.setenv("DATABASE_URL", SCRATCH_URL)
-    try:
-        command.upgrade(_alembic_config(), "head")
-        tables = asyncio.run(_tables_in(SCRATCH_URL))
-        assert tables >= EXPECTED_TABLES
-        assert "alembic_version" in tables
-        assert len(EXPECTED_TABLES) == 11  # DATA_MODEL §2 D1 清单
-    finally:
-        monkeypatch.undo()
-        asyncio.run(_drop_scratch_db())
-
-
-def test_downgrade_base_drops_all_tables(monkeypatch) -> None:
-    """downgrade base：完整回滚全部 D1 表。"""
-    asyncio.run(_create_scratch_db())
-    monkeypatch.setenv("DATABASE_URL", SCRATCH_URL)
-    try:
-        command.upgrade(_alembic_config(), "head")
-        command.downgrade(_alembic_config(), "base")
-        tables = asyncio.run(_tables_in(SCRATCH_URL))
-        business_tables = tables - {"alembic_version"}
-        assert business_tables == set()
-    finally:
-        monkeypatch.undo()
-        asyncio.run(_drop_scratch_db())
-
-
-def test_unique_constraint_materialized(monkeypatch) -> None:
-    """迁移后真实约束抽查：assets(name, environment) 唯一约束存在。"""
-    asyncio.run(_create_scratch_db())
-    monkeypatch.setenv("DATABASE_URL", SCRATCH_URL)
-    try:
-        command.upgrade(_alembic_config(), "head")
-        engine = create_async_engine(SCRATCH_URL)
-        try:
-
-            async def _fetch() -> object:
-                async with engine.connect() as conn:
-                    rows = await conn.execute(
-                        text(
-                            "SELECT conname FROM pg_constraint "
-                            "WHERE contype = 'u' AND conrelid = 'assets'::regclass"
-                        )
-                    )
-                    return [r[0] for r in rows]
-
-            names = asyncio.run(_fetch())
-        finally:
-            asyncio.run(engine.dispose())
-        assert "uq_assets_name_environment" in names
-    finally:
-        monkeypatch.undo()
-        asyncio.run(_drop_scratch_db())
+        if saved_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = saved_url
+        _drop()

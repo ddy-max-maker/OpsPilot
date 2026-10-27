@@ -55,5 +55,87 @@ services:
     ports:
       - "8080:80"
 
+  # ---- D2：Agent Worker（独立进程；不挂载 docker.sock，ADR-11）----
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opspilot-worker
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://opspilot:opspilot@postgres:5432/opspilot
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      WEBHOOK_ALERTS_SECRET: ${WEBHOOK_ALERTS_SECRET:?WEBHOOK_ALERTS_SECRET is required}
+      AGENT_PROVIDER: ${AGENT_PROVIDER:-fake}
+      AGENT_MODEL_NAME: ${AGENT_MODEL_NAME:-fake-diagnoser}
+      AGENT_API_KEY_ENV: ${AGENT_API_KEY_ENV:-}
+      AGENT_PROMPT_VERSION: ${AGENT_PROMPT_VERSION:-d2-v1}
+      BUDGET_MAX_TOOL_CALLS: ${BUDGET_MAX_TOOL_CALLS:-24}
+      BUDGET_DEADLINE_SECONDS: ${BUDGET_DEADLINE_SECONDS:-900}
+      WORKER_LEASE_TTL_SECONDS: ${WORKER_LEASE_TTL_SECONDS:-60}
+    command: sh -c "alembic upgrade head && python -m entrypoints.worker"
+    restart: unless-stopped
+
+  # ---- D2：Docker 只读代理（唯一挂载 docker.sock 的组件，ADR-11）----
+  docker-ro-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opspilot-docker-ro-proxy
+    command: sh -c "uvicorn roproxy.app:app --host 0.0.0.0 --port 8800"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8800/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  # ---- D2 演示环境（profile: demo；不影响 OpsPilot 自身服务）----
+  demo-app:
+    image: python:3.12-slim
+    container_name: opspilot-demo-app
+    profiles: ["demo"]
+    volumes:
+      - ./demo/demo_app.py:/srv/demo_app.py:ro
+    command: python /srv/demo_app.py
+    environment:
+      DEMO_REDIS_HOST: demo-redis
+      DEMO_REDIS_PORT: "6379"
+    restart: unless-stopped
+
+  demo-redis:
+    image: redis:7-alpine
+    container_name: opspilot-demo-redis
+    profiles: ["demo"]
+    restart: unless-stopped
+
+  demo-gateway:
+    image: nginx:1.27-alpine
+    container_name: opspilot-demo-gateway
+    profiles: ["demo"]
+    depends_on:
+      - demo-app
+    volumes:
+      - ./demo/gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8081:80"
+    restart: unless-stopped
+
+  # S2 注入用：受内存限制的压力容器（独立 profile，仅注入脚本启动）
+  demo-crasher:
+    image: python:3.12-slim
+    container_name: opspilot-demo-crasher
+    profiles: ["demo-fault"]
+    volumes:
+      - ./demo/crasher.py:/srv/crasher.py:ro
+    command: python /srv/crasher.py
+    mem_limit: 32m
+    restart: "no"
+
 volumes:
   pgdata:

@@ -1,0 +1,39 @@
+D2: DeepAgents 智能故障诊断（AgentRuntime/Tool Gateway/ops-worker/真实故障演示）
+
+架构（docs/ADR-D2-EXECUTION-CORE.md）：
+- 单一执行核心：DeepAgents create_deep_agent 内置规划/工具/取证循环，
+  不手写重复 ReAct 图；AgentRuntime 以 astream(stream_mode="updates") 步进驱动，
+  在 super-step 间强制取消/deadline/迭代/Token 预算（服务端硬限制，Prompt 不可绕过）
+- HarnessProfile 裁剪 DeepAgents 工具面：移除 execute 与通用 subagent，
+  内置文件操作隔离于 graph state 虚拟 FS（不触及目标基础设施）
+- PostgresSaver Checkpoint 落 langgraph 独立 schema，thread_id = run_id；
+  业务状态以 PostgreSQL 为权威
+
+诊断域（迁移 0002）：
+- investigation_runs/run_events/evidence/hypotheses/diagnostic_reports
+  + connector_types/connector_instances/secret_refs
+- Run REST API：创建（幂等 202）/状态/事件增量分页/取消/证据/结构化报告
+
+Tool Gateway 与连接器：
+- Pydantic 参数校验（extra=forbid）→ 授权快照默认拒绝 → manifest 环境/资产
+  类型范围 → 限流 → 预算 → Evidence 归一化落库（ok/error/timeout/unavailable
+  均为证据）→ 审计；4 个只读工具（服务健康/容器状态/容器日志/Redis 健康）
+- 脱敏：bearer/连接串/前缀型密钥 + 键名级替换 + 递归截断（summary ≤2KB、payload ≤256KB）
+- docker-ro-proxy：Docker Engine API 方法+路径白名单（仅 GET 查询类），
+  拒绝启停/创建/删除/exec；Worker 不持有 docker.sock
+
+ops-worker（entrypoints/worker.py）：
+- PostgreSQL 认领：SELECT FOR UPDATE SKIP LOCKED + lease_owner/fence_token fencing
+  （旧 Worker 失效禁止回写）+ 租约心跳合并取消检查；非正常终态补 unknown 报告
+
+模型 Provider：
+- 可配置（fake | anthropic | google），API Key 经环境变量间接引用；
+  记录模型/Prompt 版本、Token 用量与耗时；FakeDiagnoserChatModel 确定性脚本模型；
+  真实模型测试与 CI 分离（无凭据自动跳过，不伪造端到端）
+
+真实故障演示环境（demo profile）：
+- S1 Redis 不可达 / S2 容器 OOM 退出（exit 137）/ S4 Nginx 上游 502；
+  注入/状态/恢复脚本（scripts/demo/faults.ps1）+ E2E 场景运行器（scripts/run_scenario.py）
+
+测试：192 passed + 1 skipped（D1 存量 133 不回退；D2 新增 59）；
+Ruff / mypy 全绿；CI 增加 D2 迁移表与 langgraph schema 校验、AGENT_PROVIDER=fake。

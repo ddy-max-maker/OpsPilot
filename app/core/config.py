@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -50,6 +51,55 @@ class Settings(BaseSettings):
 
     # ---- 密码策略 ----
     password_min_length: int = 8
+
+    # ===== D2：诊断运行 / Agent Worker（IMPLEMENTATION_PLAN §2.2 / §4#10）=====
+
+    # ---- 模型 Provider（部署期锁定，#6；模型名不写死在业务层）----
+    agent_provider: str = "fake"  # fake | anthropic | google
+    agent_model_name: str = "fake-diagnoser"
+    # API Key 经环境变量间接引用（密钥不入代码/Prompt/日志）
+    agent_api_key_env: str | None = None  # 如 ANTHROPIC_API_KEY
+    agent_prompt_version: str = "d2-v1"
+
+    # ---- Run 预算默认值（服务端硬限制，ADR-8；超限强制终止）----
+    budget_max_tool_calls: int = 24
+    budget_max_iterations: int = 40
+    budget_max_tokens: int = 200_000
+    budget_deadline_seconds: int = 900
+
+    # ---- Worker DB 认领（ADR-4/ADR-12）----
+    worker_lease_ttl_seconds: int = 60
+    worker_heartbeat_interval_seconds: float = 15.0
+    worker_poll_interval_seconds: float = 2.0
+    worker_id: str | None = None  # 缺省自动生成（主机名+pid）
+
+    # ---- checkpoint 保留（DATA_MODEL §5：随 run 终态保留 N 天，清理任务随 Worker 上线）----
+    checkpoint_retention_days: int = 30
+
+    # ---- Evidence 上限（CONTRACTS §3：summary ≤ 2KB、payload ≤ 256KB）----
+    evidence_summary_max_bytes: int = 2048
+    evidence_payload_max_bytes: int = 262_144
+
+    # ---- 连接器默认超时/限流（manifest 未声明时的兜底）----
+    connector_timeout_seconds: float = 5.0
+    connector_max_calls_per_run: int = 30
+
+    # ---- 停止条件（IMPLEMENTATION_PLAN §2.2：连续 N 轮无新证据 → no_new_evidence）----
+    no_new_evidence_rounds: int = 3
+
+    @property
+    def agent_api_key(self) -> str | None:
+        """按间接引用的环境变量名读取 API Key（缺省 None → 仅 fake 可用）。"""
+        if not self.agent_api_key_env:
+            return None
+        return os.environ.get(self.agent_api_key_env)
+
+    @property
+    def psycopg_database_url(self) -> str:
+        """checkpoint 专用 psycopg 连接串（langgraph schema，ADR-5）。"""
+        url = self.database_url.replace("postgresql+asyncpg://", "postgresql://")
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}options=-c%20search_path%3Dlanggraph"
 
     @property
     def signing_secret(self) -> str:
