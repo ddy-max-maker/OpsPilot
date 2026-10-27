@@ -31,6 +31,9 @@ services:
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required}
+      WEBHOOK_ALERTS_SECRET: ${WEBHOOK_ALERTS_SECRET:?WEBHOOK_ALERTS_SECRET is required (copy .env.example to .env)}
+      WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: ${WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS:-300}
+      IDEMPOTENCY_TTL_HOURS: ${IDEMPOTENCY_TTL_HOURS:-24}
     ports:
       - "8000:8000"
     command: sh -c "alembic upgrade head && uvicorn entrypoints.api:app --host 0.0.0.0 --port 8000"
@@ -40,6 +43,17 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: opspilot-web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:80"
 
 volumes:
   pgdata:

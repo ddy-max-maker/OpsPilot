@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint & Type Check (Ruff + mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: mypy type check
+        run: uv run mypy app
+
+  test:
+    name: Tests (real PostgreSQL + Alembic drill)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: opspilot
+          POSTGRES_PASSWORD: opspilot
+          POSTGRES_DB: opspilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U opspilot"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # CI 专用配置，不依赖本地 .env / .env.local / 开发机私人配置
+      JWT_SECRET: ci-only-jwt-secret-0123456789abcdef
+      WEBHOOK_ALERTS_SECRET: ci-only-webhook-secret-0123456789abcdef
+      BOOTSTRAP_ADMIN_USERNAME: admin
+      BOOTSTRAP_ADMIN_EMAIL: admin@example.com
+      BOOTSTRAP_ADMIN_PASSWORD: AdminBoot123!
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Alembic migration drill (empty database -> head)
+        env:
+          DATABASE_URL: postgresql+asyncpg://opspilot:opspilot@localhost:5432/opspilot
+        run: uv run alembic upgrade head
+
+      - name: Verify migrated schema objects exist
+        env:
+          PGPASSWORD: opspilot
+        run: |
+          psql -h localhost -U opspilot -d opspilot -c "\dt" | tee /tmp/tables.txt
+          grep -q "incidents" /tmp/tables.txt
+          grep -q "alerts" /tmp/tables.txt
+          grep -q "api_idempotency_keys" /tmp/tables.txt
+          grep -q "audit_events" /tmp/tables.txt
+
+      # 集成测试：conftest 自行重建 opspilot_test 库并执行迁移，
+      # DATABASE_URL 由 conftest 注入，无需在此提供
+      - name: Run pytest (integration, real PostgreSQL)
+        run: uv run pytest -q

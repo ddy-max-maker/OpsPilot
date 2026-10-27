@@ -23,9 +23,15 @@ def _asset_payload(name: str, environment: str = "sandbox", **extra: object) -> 
 
 
 async def _create(
-    client: httpx.AsyncClient, headers: dict, name: str, environment: str = "sandbox"
+    client: httpx.AsyncClient,
+    headers: dict,
+    name: str,
+    environment: str = "sandbox",
+    **extra: object,
 ) -> httpx.Response:
-    return await client.post(ASSETS, json=_asset_payload(name, environment), headers=headers)
+    return await client.post(
+        ASSETS, json=_asset_payload(name, environment, **extra), headers=headers
+    )
 
 
 # ---- 创建（Admin）----
@@ -325,6 +331,84 @@ async def test_patch_to_conflicting_name_409(client: httpx.AsyncClient, ready_ad
     resp = await client.patch(ASSETS + f"/{b_id}", json={"name": "conflict-a"}, headers=ready_admin)
     assert resp.status_code == 409
     _ = a
+
+
+# ---- PATCH 显式 null 语义（D1-B 修复：区分未提交/显式 null/字段级 null）----
+
+
+async def test_patch_endpoints_explicit_null_clears_all(
+    client: httpx.AsyncClient, ready_admin: dict
+) -> None:
+    """endpoints: null（显式整体清空）——与未提交语义区分。"""
+    created = await _create(
+        client,
+        ready_admin,
+        "null-clear-svc",
+        endpoints={"health_url": "http://a/healthz", "metrics_ref": "metrics://a"},
+    )
+    asset_id = created.json()["data"]["id"]
+    resp = await client.patch(
+        ASSETS + f"/{asset_id}", json={"endpoints": None}, headers=ready_admin
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["endpoints"] is None
+
+
+async def test_patch_endpoints_omitted_keeps_existing(
+    client: httpx.AsyncClient, ready_admin: dict
+) -> None:
+    """未提交 endpoints 字段 → 保持不变（向后兼容）。"""
+    created = await _create(
+        client, ready_admin, "null-keep-svc", endpoints={"health_url": "http://keep/healthz"}
+    )
+    asset_id = created.json()["data"]["id"]
+    resp = await client.patch(
+        ASSETS + f"/{asset_id}", json={"owner": "someone"}, headers=ready_admin
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["endpoints"]["health_url"] == "http://keep/healthz"
+
+
+async def test_patch_endpoints_field_level_null_clears_only_that_field(
+    client: httpx.AsyncClient, ready_admin: dict
+) -> None:
+    """嵌套字段级显式 null：仅清除该字段，其余保留。"""
+    created = await _create(
+        client,
+        ready_admin,
+        "null-field-svc",
+        endpoints={"health_url": "http://f/healthz", "metrics_ref": "metrics://f"},
+    )
+    asset_id = created.json()["data"]["id"]
+    resp = await client.patch(
+        ASSETS + f"/{asset_id}",
+        json={"endpoints": {"health_url": None}},
+        headers=ready_admin,
+    )
+    assert resp.status_code == 200
+    endpoints = resp.json()["data"]["endpoints"]
+    assert endpoints is not None
+    assert endpoints["health_url"] is None  # 显式 null 清除
+    assert endpoints["metrics_ref"] == "metrics://f"  # 其余保留
+
+
+async def test_patch_endpoints_partial_update_merges(
+    client: httpx.AsyncClient, ready_admin: dict
+) -> None:
+    """提交部分字段：未提交的嵌套字段保留原值。"""
+    created = await _create(
+        client, ready_admin, "null-merge-svc", endpoints={"health_url": "http://m/healthz"}
+    )
+    asset_id = created.json()["data"]["id"]
+    resp = await client.patch(
+        ASSETS + f"/{asset_id}",
+        json={"endpoints": {"logs_ref": "logs://m"}},
+        headers=ready_admin,
+    )
+    assert resp.status_code == 200
+    endpoints = resp.json()["data"]["endpoints"]
+    assert endpoints["health_url"] == "http://m/healthz"  # 保留
+    assert endpoints["logs_ref"] == "logs://m"  # 新增
 
 
 # ---- 审计 ----

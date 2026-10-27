@@ -10,11 +10,12 @@ from app.models.audit import AuditEvent
 from app.models.base import Base
 from app.models.incident import Incident
 from app.models.outbox import ApiIdempotencyKey, OutboxEvent
-from app.models.user import AssetAccessPolicy, Role, User, UserRole
+from app.models.user import SYSTEM_USER_ID, AssetAccessPolicy, Role, User, UserRole
 
 __all__ = [
     "Alert",
     "ApiIdempotencyKey",
+    "SYSTEM_USER_ID",
     "Asset",
     "AssetAccessPolicy",
     "AssetEdge",

@@ -138,9 +138,28 @@ async def update_asset(
     if req.status is not None and req.status.value != asset.status:
         asset.status = req.status.value
         changes["status"] = req.status.value
-    if req.endpoints is not None:
-        asset.endpoints = req.endpoints.model_dump(exclude_none=True) or None
-        changes["endpoints"] = asset.endpoints
+    if "endpoints" in req.model_fields_set:
+        # 区分三种语义：未提交（保持不变）、显式 null（整体清空）、
+        # 嵌套字段级显式 null（仅清除该字段，保留其余）。
+        if req.endpoints is None:
+            if asset.endpoints is not None:
+                asset.endpoints = None
+                changes["endpoints"] = None
+        else:
+            current = dict(asset.endpoints) if asset.endpoints else {}
+            submitted = req.endpoints.model_fields_set
+            for key in ("health_url", "metrics_ref", "logs_ref"):
+                if key not in submitted:
+                    continue
+                value = getattr(req.endpoints, key)
+                if value is None:
+                    current.pop(key, None)
+                else:
+                    current[key] = value
+            new_endpoints = current or None
+            if new_endpoints != asset.endpoints:
+                asset.endpoints = new_endpoints
+                changes["endpoints"] = new_endpoints
     if req.owner is not None and req.owner != asset.owner:
         asset.owner = req.owner
         changes["owner"] = req.owner

@@ -10,6 +10,8 @@ venv/
 # 环境与密钥（禁止提交真实密钥）
 .env
 .env.local
+*.log
+logs/
 
 # 测试与工具缓存
 .pytest_cache/

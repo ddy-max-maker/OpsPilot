@@ -11,9 +11,10 @@ from typing import Any
 
 
 class ErrorCode(StrEnum):
-    """稳定错误码枚举（首版子集，仅包含 D1-A 用到的码）。"""
+    """稳定错误码枚举（CONTRACTS §1.4，按阶段渐进启用）。"""
 
     VALIDATION_ERROR = "VALIDATION_ERROR"
+    IDEMPOTENCY_KEY_REQUIRED = "IDEMPOTENCY_KEY_REQUIRED"
     UNAUTHENTICATED = "UNAUTHENTICATED"
     FORBIDDEN = "FORBIDDEN"
     FORBIDDEN_ASSET_SCOPE = "FORBIDDEN_ASSET_SCOPE"
@@ -21,6 +22,7 @@ class ErrorCode(StrEnum):
     NOT_FOUND = "NOT_FOUND"
     CONFLICT_STATE = "CONFLICT_STATE"
     IDEMPOTENCY_KEY_MISMATCH = "IDEMPOTENCY_KEY_MISMATCH"
+    DUPLICATE_ALERT = "DUPLICATE_ALERT"
     INTERNAL = "INTERNAL"
 
 
@@ -43,6 +45,29 @@ class ApiError(Exception):
 
 def validation_error(message: str, details: dict[str, Any] | None = None) -> ApiError:
     return ApiError(400, ErrorCode.VALIDATION_ERROR, message, details)
+
+
+def idempotency_key_required() -> ApiError:
+    """该端点要求幂等键（CONTRACTS §1.3：POST /incidents 等重要 POST）。"""
+    return ApiError(
+        400,
+        ErrorCode.IDEMPOTENCY_KEY_REQUIRED,
+        "Idempotency-Key header is required for this endpoint",
+    )
+
+
+def idempotency_key_mismatch() -> ApiError:
+    """相同 key + 不同请求体（CONTRACTS §1.3）。"""
+    return ApiError(
+        409,
+        ErrorCode.IDEMPOTENCY_KEY_MISMATCH,
+        "request body does not match the original request for this Idempotency-Key",
+    )
+
+
+def duplicate_alert(details: dict[str, Any]) -> ApiError:
+    """告警 delivery 去重命中：webhook 返回既有 incident 引用（CONTRACTS §1.4）。"""
+    return ApiError(409, ErrorCode.DUPLICATE_ALERT, "alert delivery already processed", details)
 
 
 def unauthenticated(message: str = "authentication required or failed") -> ApiError:

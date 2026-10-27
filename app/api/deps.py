@@ -100,6 +100,25 @@ async def get_asset_scope(session: SessionDep, current: ReadyUserDep) -> AssetSc
 AssetScopeDep = Annotated[AssetScope, Depends(get_asset_scope)]
 
 
+def get_asset_scope_for(permission: str) -> Any:
+    """按权限维度解析资产范围的依赖工厂（PolicyPermission：read/investigate/...）。
+
+    D1 语义（CONTRACTS §7.1）：查看事件 = read；创建/确认事件 = investigate。
+    """
+
+    async def _resolver(session: SessionDep, current: ReadyUserDep) -> AssetScope:
+        return await access_service.get_effective_scope(
+            session, current.user.id, current.role_codes, permission=permission
+        )
+
+    return _resolver
+
+
+InvestigateScopeDep = Annotated[AssetScope, Depends(get_asset_scope_for("investigate"))]
+
+ReadScopeDep = Annotated[AssetScope, Depends(get_asset_scope_for("read"))]
+
+
 def scope_summary(scope: AssetScope) -> AssetScopeData:
     """GET /auth/me 的资产范围摘要。"""
     from app.core.enums import Environment

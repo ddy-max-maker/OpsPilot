@@ -26,6 +26,7 @@ ADMIN_BOOT_PASSWORD = "AdminBoot123!"
 
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["JWT_SECRET"] = "test-jwt-secret-0123456789abcdef"
+os.environ["WEBHOOK_ALERTS_SECRET"] = "test-webhook-secret-0123456789abcdef"
 os.environ["BOOTSTRAP_ADMIN_USERNAME"] = ADMIN_BOOT_USERNAME
 os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = ADMIN_BOOT_PASSWORD

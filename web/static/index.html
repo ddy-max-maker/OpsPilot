@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpsPilot Next</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header id="nav" class="nav hidden">
+    <div class="nav-brand">OpsPilot Next</div>
+    <nav class="nav-links">
+      <a href="#/assets" data-nav="assets">资产管理</a>
+      <a href="#/incidents" data-nav="incidents">故障事件</a>
+      <a href="#/audit" data-nav="audit">审计日志</a>
+    </nav>
+    <div class="nav-user">
+      <span id="nav-user-name"></span>
+      <span id="nav-user-roles" class="badge muted"></span>
+      <button id="logout-btn" class="btn ghost">退出</button>
+    </div>
+  </header>
+
+  <main id="app" class="app"></main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

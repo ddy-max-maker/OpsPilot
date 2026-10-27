@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     # ---- cursor 分页签名（缺省复用 JWT_SECRET）----
     cursor_secret: str | None = None
 
+    # ---- Webhook 告警接入（CONTRACTS §5：HMAC-SHA256 + timestamp 防重放，容差 ±5min）----
+    webhook_alerts_secret: str
+    webhook_timestamp_tolerance_seconds: int = 300
+
+    # ---- API 幂等键保留时长（契约：服务端保存 24h）----
+    idempotency_ttl_hours: int = 24
+
     # ---- 初始 Admin 引导（环境变量，不硬编码密码）----
     bootstrap_admin_username: str | None = None
     bootstrap_admin_email: str | None = None
