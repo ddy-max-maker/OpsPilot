@@ -310,6 +310,8 @@ class ToolGateway:
             min(self._settings.evidence_payload_max_bytes, result_max_bytes),
         )
         evidence_id = new_id("ev_")
+        # D2.1 fencing：旧 Worker 失去租约后禁止证据写入
+        await ctx.assert_lease()
         async with self._session_factory() as session:
             session.add(
                 Evidence(

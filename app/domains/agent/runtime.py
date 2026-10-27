@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -40,6 +41,8 @@ from app.domains.agent.prompts import (
     build_run_task_prompt,
 )
 from app.domains.tools.context import (
+    LeaseFence,
+    LeaseLostError,
     RunBudget,
     RunCanceled,
     RunEventWriter,
@@ -117,6 +120,8 @@ class RunExecution:
     asset: Asset
     cancel_checker: Any  # CancelChecker
     events: RunEventWriter
+    # D2.1 fencing：绑定后所有业务写入（事件/证据/假设/报告）前校验租约
+    lease_fence: LeaseFence | None = None
 
 
 @dataclass
@@ -258,8 +263,19 @@ class AgentRuntime:
                 stop_reason=RunStopReason.CANCELED,
                 usage=budget.as_usage(),
             )
+        except LeaseLostError as exc:
+            # D2.1 fencing：租约被接管——立即静默退出；终态回写将由 fence 拒绝，
+            # 不再产生任何业务写入（含 ERROR 事件）
+            logger.warning("run %s aborted: %s", run.id, exc)
+            return RunOutcome(
+                status=RunStatus.FAILED,
+                stop_reason=RunStopReason.ERROR,
+                usage=budget.as_usage(),
+                error=str(exc)[:500],
+            )
         except ToolBudgetExhausted as exc:
-            await execution.events.append(RunEventType.BUDGET_WARNING, {"reason": str(exc)})
+            with contextlib.suppress(LeaseLostError):
+                await execution.events.append(RunEventType.BUDGET_WARNING, {"reason": str(exc)})
             return RunOutcome(
                 status=RunStatus.COMPLETED,
                 stop_reason=RunStopReason.BUDGET_EXHAUSTED,
@@ -275,9 +291,10 @@ class AgentRuntime:
             )
         except Exception as exc:  # noqa: BLE001 — 模型/框架错误统一 failed
             logger.exception("run %s failed", run.id)
-            await execution.events.append(
-                RunEventType.ERROR, {"error": type(exc).__name__, "detail": str(exc)[:500]}
-            )
+            with contextlib.suppress(LeaseLostError):
+                await execution.events.append(
+                    RunEventType.ERROR, {"error": type(exc).__name__, "detail": str(exc)[:500]}
+                )
             return RunOutcome(
                 status=RunStatus.FAILED,
                 stop_reason=RunStopReason.ERROR,
@@ -315,19 +332,24 @@ class AgentRuntime:
         unknown_note: dict[str, Any] = dict(report_data.get("unknown") or {})
         is_unknown = bool(unknown_note.get("is_unknown"))
 
-        # 证据引用有效性：全部 evidence_ids 必须命中本 run 已落库 Evidence
+        # 证据引用有效性：全部 evidence_ids 必须命中本 run 已落库 Evidence，
+        # 并记录证据状态（D2.1：区分正常取证与采集失败——连接器错误不自动等于业务根因）
         async with deps.session_factory() as session:
-            existing = set(
-                (
-                    await session.execute(select(Evidence.id).where(Evidence.run_id == run.id))
-                ).scalars()
-            )
+            rows = (
+                await session.execute(
+                    select(Evidence.id, Evidence.status).where(Evidence.run_id == run.id)
+                )
+            ).all()
+        existing = {row.id for row in rows}
+        ok_evidence = {row.id for row in rows if row.status == "ok"}
         key_findings = report_data.get("key_findings") or []
         for finding in key_findings:
             refs = finding.get("evidence_ids") or []
             finding["evidence_ids"] = [r for r in refs if r in existing]
 
-        # 假设：supported 必须有 ≥1 条本 run 实时证据（CONTRACTS §2.7）
+        # 假设：supported 必须有 ≥1 条本 run 实时证据（CONTRACTS §2.7）；
+        # D2.1：且至少 1 条 status=ok 的正常取证——仅由 error/unavailable 证据
+        # （连接器不可用、工具失败）支撑的假设不构成业务根因，降级为 insufficient_data
         hypotheses: list[dict[str, Any]] = []
         for rank, item in enumerate(report_data.get("hypotheses") or [], start=1):
             supporting = [r for r in (item.get("supporting_evidence_ids") or []) if r in existing]
@@ -335,11 +357,18 @@ class AgentRuntime:
                 r for r in (item.get("contradicting_evidence_ids") or []) if r in existing
             ]
             status = str(item.get("status") or HypothesisStatus.CANDIDATE.value)
-            if status == HypothesisStatus.SUPPORTED.value and not supporting:
-                status = HypothesisStatus.INSUFFICIENT_DATA.value
+            demote_reason: str | None = None
+            if status == HypothesisStatus.SUPPORTED.value:
+                if not supporting:
+                    status = HypothesisStatus.INSUFFICIENT_DATA.value
+                    demote_reason = "无有效实时证据"
+                elif not any(r in ok_evidence for r in supporting):
+                    status = HypothesisStatus.INSUFFICIENT_DATA.value
+                    demote_reason = "仅有采集失败证据（error/unavailable），不构成根因支持"
             if is_unknown and status == HypothesisStatus.SUPPORTED.value:
                 # unknown 报告不得存在 supported 根因（CONTRACTS §2.16）
                 status = HypothesisStatus.INSUFFICIENT_DATA.value
+                demote_reason = demote_reason or "unknown 报告禁止 supported 根因"
             try:
                 confidence = Confidence(str(item.get("confidence") or Confidence.LOW.value))
             except ValueError:
@@ -351,18 +380,31 @@ class AgentRuntime:
                     "status": status,
                     "supporting_evidence_ids": supporting,
                     "contradicting_evidence_ids": contradicting,
-                    "missing_information": list(item.get("missing_information") or []),
+                    "missing_information": [
+                        *list(item.get("missing_information") or []),
+                        *([demote_reason] if demote_reason else []),
+                    ],
                     "confidence": confidence.value,
                 }
             )
-        if is_unknown and not any(
-            h["status"] == HypothesisStatus.SUPPORTED.value for h in hypotheses
-        ):
-            pass  # 已通过上面的降级保证
 
-        # 落库：hypotheses + diagnostic_reports（版本 1）
+        # 落库：hypotheses + diagnostic_reports（版本号递增：接管重跑写 v2+，禁止覆盖）
+        # D2.1 fencing：旧 Worker 失去租约后禁止假设/报告写入
+        if execution.lease_fence is not None:
+            await execution.lease_fence.assert_valid()
         hypothesis_ids: list[str] = []
         async with deps.session_factory() as session:
+            next_version = (
+                int(
+                    await session.scalar(
+                        select(func.max(DiagnosticReport.version_no)).where(
+                            DiagnosticReport.run_id == run.id
+                        )
+                    )
+                    or 0
+                )
+                + 1
+            )
             for item in hypotheses:
                 hyp_id = new_id("hyp_")
                 hypothesis_ids.append(hyp_id)
@@ -391,7 +433,7 @@ class AgentRuntime:
             report = DiagnosticReport(
                 id=new_id("rpt_"),
                 run_id=run.id,
-                version_no=1,
+                version_no=next_version,
                 status="final",
                 conclusion={
                     "summary": str(report_data.get("summary") or "")[:2000],
@@ -430,19 +472,35 @@ class AgentRuntime:
     async def write_fallback_report(
         self, execution: RunExecution, *, reason: str, evidence_ids: list[str] | None = None
     ) -> None:
-        """预算耗尽/无新证据终态时写入 unknown 快照（保证终态有报告，ADR-13）。"""
+        """预算耗尽/无新证据终态时写入 unknown 快照（保证终态有报告，ADR-13）。
+
+        D2.1：版本号递增（避免接管重跑覆盖）；写入前校验租约。
+        """
         deps = self._deps
         run = execution.run
+        if execution.lease_fence is not None:
+            await execution.lease_fence.assert_valid()
         async with deps.session_factory() as session:
             existing = sorted(
                 (
                     await session.execute(select(Evidence.id).where(Evidence.run_id == run.id))
                 ).scalars()
             )
+            next_version = (
+                int(
+                    await session.scalar(
+                        select(func.max(DiagnosticReport.version_no)).where(
+                            DiagnosticReport.run_id == run.id
+                        )
+                    )
+                    or 0
+                )
+                + 1
+            )
             report = DiagnosticReport(
                 id=new_id("rpt_"),
                 run_id=run.id,
-                version_no=1,
+                version_no=next_version,
                 status="final",
                 conclusion={
                     "summary": f"诊断在完成前终止：{reason}",
@@ -483,6 +541,7 @@ class AgentRuntime:
             cancel_checker=execution.cancel_checker,
             connector_configs=configs,
             all_assets=bool(snapshot.get("all_assets")),
+            lease_fence=execution.lease_fence,
         )
         return ctx, configs
 

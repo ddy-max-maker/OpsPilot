@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.enums import RunEventType
@@ -29,6 +29,51 @@ class ToolBudgetExhausted(RuntimeError):
 
 class RunCanceled(RuntimeError):
     """用户请求取消（合作式停止）。"""
+
+
+class LeaseLostError(RuntimeError):
+    """租约已被新 Worker 接管（fence_token 失效）——禁止继续产生业务写入。"""
+
+
+@dataclass(frozen=True)
+class LeaseFence:
+    """fencing 凭证：所有业务写入（事件/证据/假设/报告）前的有效性校验依据。
+
+    D2.1：仅 finish_run 校验 fence 不够——旧 Worker 失去租约后仍可能通过
+    RunEventWriter / Gateway / 报告落库产生"有效"业务写入。此处将
+    fence_token + lease_owner 绑定到写入通道，写入前逐次校验 DB 行。
+    """
+
+    session_factory: async_sessionmaker[AsyncSession]
+    run_id: str
+    fence_token: int
+    worker_id: str
+
+    async def assert_valid(self) -> None:
+        """校验当前 Worker 仍持有该 run 的本轮融资（fence_token+owner 唯一）。
+
+        注意：不校验 status——合法 Worker 在 finish_run 置终态后仍需补写
+        RUN_FINISHED 事件与 fallback 报告；旧 Worker 因 fence_token 已被
+        接管者 +1 递增而必然失配。失效抛 LeaseLostError（调用方立即中止）。
+        """
+        async with self.session_factory() as session:
+            row = await session.execute(
+                text(
+                    "SELECT 1 FROM investigation_runs "
+                    "WHERE id = :run_id AND fence_token = :fence_token "
+                    "  AND lease_owner = :worker_id"
+                ),
+                {
+                    "run_id": self.run_id,
+                    "fence_token": self.fence_token,
+                    "worker_id": self.worker_id,
+                },
+            )
+        if row.first() is None:
+            raise LeaseLostError(
+                f"run {self.run_id} lease lost (fence={self.fence_token}, "
+                f"worker={self.worker_id}); business writes are forbidden"
+            )
 
 
 @dataclass
@@ -71,6 +116,8 @@ class RunToolContext:
     connector_configs: dict[str, dict[str, Any]]  # connector_code -> config
     all_assets: bool = False
     rate_state: dict[str, float] = field(default_factory=dict)
+    # D2.1 fencing：旧 Worker 失去租约后，Gateway 证据落库前校验（None = 测试直连）
+    lease_fence: LeaseFence | None = None
     _seq: int = 0
     _seq_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -99,9 +146,18 @@ class RunToolContext:
             )
         self.rate_state[connector_code] = used + 1
 
+    async def assert_lease(self) -> None:
+        """Gateway/运行时业务写入前统一入口（未绑定 fence 时跳过——测试直连）。"""
+        if self.lease_fence is not None:
+            await self.lease_fence.assert_valid()
+
 
 class RunEventWriter:
-    """run_events 追加器：run 内单调 seq，事务独立提交（UI 轮询可见）。"""
+    """run_events 追加器：run 内单调 seq，事务独立提交（UI 轮询可见）。
+
+    D2.1 fencing：绑定 lease_fence 后，每次 append 前校验租约——
+    旧 Worker 失去租约后不再产生任何 run_events 写入。
+    """
 
     def __init__(
         self,
@@ -109,21 +165,27 @@ class RunEventWriter:
         run_id: str,
         *,
         start_seq: int = 0,
+        lease_fence: LeaseFence | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._run_id = run_id
         self._seq = start_seq
         self._seq_lock = asyncio.Lock()
+        self._lease_fence = lease_fence
 
     @classmethod
     async def create(
-        cls, session_factory: async_sessionmaker[AsyncSession], run_id: str
+        cls,
+        session_factory: async_sessionmaker[AsyncSession],
+        run_id: str,
+        *,
+        lease_fence: LeaseFence | None = None,
     ) -> RunEventWriter:
         async with session_factory() as session:
             current = await session.scalar(
                 select(func.max(RunEvent.seq)).where(RunEvent.run_id == run_id)
             )
-        return cls(session_factory, run_id, start_seq=int(current or 0))
+        return cls(session_factory, run_id, start_seq=int(current or 0), lease_fence=lease_fence)
 
     @property
     def last_seq(self) -> int:
@@ -134,6 +196,8 @@ class RunEventWriter:
         event_type: RunEventType,
         payload: dict[str, Any] | None = None,
     ) -> int:
+        if self._lease_fence is not None:
+            await self._lease_fence.assert_valid()
         async with self._seq_lock:
             self._seq += 1
             seq = self._seq

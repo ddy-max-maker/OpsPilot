@@ -5,7 +5,7 @@
 #   .\scripts\demo\faults.ps1 -Action recover -Scenario S1
 #   .\scripts\demo\faults.ps1 -Action inject  -Scenario S2   # container OOM exit
 #   .\scripts\demo\faults.ps1 -Action recover -Scenario S2
-#   .\scripts\demo\faults.ps1 -Action inject  -Scenario S4   # gateway upstream 502
+#   .\scripts\demo\faults.ps1 -Action inject  -Scenario S4   # gateway upstream down (observed 504)
 #   .\scripts\demo\faults.ps1 -Action recover -Scenario S4
 #   .\scripts\demo\faults.ps1 -Action status
 param(
@@ -23,7 +23,7 @@ $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 function Invoke-Status {
     Write-Host "== demo environment =="
-    Write-Host "-- demo-gateway /health (expect 502 after S4):"
+    Write-Host "-- demo-gateway /health (expect 5xx after S4; observed 504):"
     try {
         $g = Invoke-WebRequest -Uri "http://localhost:8081/health" -UseBasicParsing
         Write-Host "   HTTP $($g.StatusCode) $($g.Content)"
@@ -69,10 +69,10 @@ switch ($Action) {
                 Write-Host "[S2] done. crasher: $state"
             }
             "S4" {
-                Write-Host "[S4] injecting: stop demo-app (gateway upstream down -> real 502)..."
+                Write-Host "[S4] injecting: stop demo-app (gateway upstream down -> real 5xx, observed 504)..."
                 docker stop opspilot-demo-app | Out-Null
                 Start-Sleep -Seconds 1
-                Write-Host "[S4] done. GET http://localhost:8081/health should return 502."
+                Write-Host "[S4] done. GET http://localhost:8081/health should return 5xx (observed 504)."
             }
         }
         Write-Host ""

@@ -30,7 +30,7 @@ from app.domains.agent.provider import ModelHandle, build_chat_model
 from app.domains.agent.runtime import AgentRuntime, RunExecution, RunOutcome
 from app.domains.audit import service as audit_service
 from app.domains.incidents.state_machine import require_transition
-from app.domains.tools.context import RunEventWriter
+from app.domains.tools.context import LeaseFence, LeaseLostError, RunEventWriter
 from app.domains.tools.gateway import ToolGateway
 from app.models import Asset, Incident, InvestigationRun
 from app.worker import claim
@@ -79,7 +79,7 @@ class AgentWorker:
             handle = ModelHandle(model, provider="fake", model_name=self._settings.agent_model_name)
             logger.warning(
                 "AGENT_PROVIDER=fake：使用确定性脚本模型（报告由真实工具结果合成）；"
-                "真实模型验收需配置 AGENT_PROVIDER=anthropic|google 与 API Key"
+                "真实模型验收需配置 AGENT_PROVIDER=deepseek|anthropic|google 与 API Key"
             )
         else:
             handle = build_chat_model(self._settings)
@@ -155,18 +155,39 @@ class AgentWorker:
             return
 
         assert self._runtime is not None
-        events = await RunEventWriter.create(self._session_factory, run_id)
+        # D2.1 fencing：fence 绑定所有业务写入通道（事件/证据/假设/报告）
+        lease_fence = LeaseFence(
+            session_factory=self._session_factory,
+            run_id=run_id,
+            fence_token=fence_token,
+            worker_id=self._worker_id,
+        )
+        events = await RunEventWriter.create(self._session_factory, run_id, lease_fence=lease_fence)
+
+        # 后台心跳：与模型调用解耦续租（长推理不再受 lease TTL 限制）；
+        # 续租失败（fence 失效/终态）→ lease_lost 置位 → 步进循环尽快中止
+        lease_lost = asyncio.Event()
+
+        async def heartbeat_loop() -> None:
+            interval = self._settings.worker_heartbeat_interval_seconds
+            while True:
+                await asyncio.sleep(interval)
+                alive = await claim.heartbeat(
+                    self._session_factory,
+                    run_id=run_id,
+                    fence_token=fence_token,
+                    lease_ttl_seconds=self._settings.worker_lease_ttl_seconds,
+                )
+                if not alive:
+                    logger.warning("run %s lease lost (fence=%s); aborting", run_id, fence_token)
+                    lease_lost.set()
+                    return
+
+        hb_task = asyncio.create_task(heartbeat_loop())
 
         async def cancel_checker() -> bool:
-            """取消标志 + 租约健康合并检查（每次工具调用/步进前轮询，顺带续租）。"""
-            alive = await claim.heartbeat(
-                self._session_factory,
-                run_id=run_id,
-                fence_token=fence_token,
-                lease_ttl_seconds=self._settings.worker_lease_ttl_seconds,
-            )
-            if not alive:
-                logger.warning("run %s lease lost (fence=%s); aborting", run_id, fence_token)
+            """租约健康（后台心跳判定）+ 取消标志合并检查。"""
+            if lease_lost.is_set():
                 return True
             async with self._session_factory() as session:
                 current = await session.get(InvestigationRun, run_id)
@@ -178,8 +199,14 @@ class AgentWorker:
             asset=asset,
             cancel_checker=cancel_checker,
             events=events,
+            lease_fence=lease_fence,
         )
-        outcome = await self._runtime.execute_run(execution)
+        try:
+            outcome = await self._runtime.execute_run(execution)
+        finally:
+            hb_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await hb_task
         await self._finalize(run_id, fence_token, execution, outcome)
 
     async def _finalize(
@@ -203,10 +230,11 @@ class AgentWorker:
                 "run %s fence mismatch (token=%s); discarding result", run_id, fence_token
             )
             return
-        await execution.events.append(
-            RunEventType.RUN_FINISHED,
-            {"status": outcome.status.value, "stop_reason": outcome.stop_reason.value},
-        )
+        with contextlib.suppress(LeaseLostError):
+            await execution.events.append(
+                RunEventType.RUN_FINISHED,
+                {"status": outcome.status.value, "stop_reason": outcome.stop_reason.value},
+            )
         # 非正常完成的预算类终态补 unknown 报告快照
         if outcome.report is None and outcome.status is not RunStatus.CANCELED:
             reason = {

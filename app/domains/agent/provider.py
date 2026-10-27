@@ -48,7 +48,7 @@ def build_chat_model(settings: Settings) -> ModelHandle:
     if provider is AgentProvider.FAKE:
         raise ProviderNotConfigured(
             "provider 'fake' requires an injected model (tests/demo); "
-            "configure AGENT_PROVIDER=anthropic|google with credentials for real runs"
+            "configure AGENT_PROVIDER=anthropic|google|deepseek with credentials for real runs"
         )
 
     api_key = settings.agent_api_key
@@ -81,6 +81,24 @@ def build_chat_model(settings: Settings) -> ModelHandle:
         )
         return ModelHandle(
             google_model, provider=provider.value, model_name=settings.agent_model_name
+        )
+
+    if provider is AgentProvider.DEEPSEEK:
+        # 官方集成 langchain-deepseek（ChatDeepSeek 继承 BaseChatOpenAI，
+        # OpenAI 兼容协议；api_base 缺省 https://api.deepseek.com/v1）
+        from langchain_deepseek import ChatDeepSeek  # noqa: PLC0415
+
+        kwargs: dict[str, Any] = {
+            "model": settings.agent_model_name,
+            "api_key": api_key,
+            "timeout": 120,
+            "max_retries": 1,
+        }
+        if settings.agent_api_base:
+            kwargs["api_base"] = settings.agent_api_base
+        deepseek_model = ChatDeepSeek(**kwargs)
+        return ModelHandle(
+            deepseek_model, provider=provider.value, model_name=settings.agent_model_name
         )
 
     raise ProviderNotConfigured(f"provider '{provider}' not supported in D2")

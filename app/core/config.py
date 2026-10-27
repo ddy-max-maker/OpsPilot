@@ -55,10 +55,12 @@ class Settings(BaseSettings):
     # ===== D2：诊断运行 / Agent Worker（IMPLEMENTATION_PLAN §2.2 / §4#10）=====
 
     # ---- 模型 Provider（部署期锁定，#6；模型名不写死在业务层）----
-    agent_provider: str = "fake"  # fake | anthropic | google
+    agent_provider: str = "fake"  # fake | anthropic | google | deepseek
     agent_model_name: str = "fake-diagnoser"
     # API Key 经环境变量间接引用（密钥不入代码/Prompt/日志）
-    agent_api_key_env: str | None = None  # 如 ANTHROPIC_API_KEY
+    agent_api_key_env: str | None = None  # 如 DEEPSEEK_API_KEY
+    # OpenAI 兼容自定义 API 地址（deepseek 缺省官方 https://api.deepseek.com/v1）
+    agent_api_base: str | None = None
     agent_prompt_version: str = "d2-v1"
 
     # ---- Run 预算默认值（服务端硬限制，ADR-8；超限强制终止）----

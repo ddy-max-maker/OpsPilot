@@ -188,3 +188,4 @@ class AgentProvider(StrEnum):
     FAKE = "fake"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
+    DEEPSEEK = "deepseek"  # D2.1：OpenAI 兼容官方集成（langchain-deepseek）

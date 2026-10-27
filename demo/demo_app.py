@@ -3,7 +3,8 @@
 观测面：
 - GET /health  → 200 {"status": "ok", ...}（资产 endpoints.health_url 指向此端点）
 - GET /redis-check → 经原始 RESP PING 检查 Redis 连通（S1 注入后变失败）
-故障注入不由本应用承担：S1 = 停 demo-redis 容器；S4 = 停 demo-app 容器（网关 502）。
+故障注入不由本应用承担：S1 = 停 demo-redis 容器；S4 = 停 demo-app 容器
+（网关上游故障，实测 504 Gateway Timeout）。
 """
 
 from __future__ import annotations

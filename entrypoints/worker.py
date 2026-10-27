@@ -21,6 +21,9 @@ from app.worker.loop import AgentWorker
 
 
 def main() -> None:
+    # Windows 默认 ProactorEventLoop 不支持 psycopg 异步模式（checkpoint 连接池）
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

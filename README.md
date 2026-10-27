@@ -62,7 +62,7 @@ docker compose --profile demo up -d        # 演示故障环境（demo-app / dem
 # 2. 写入连接器/资产/拓扑（幂等）
 uv run python scripts/seed_demo.py
 
-# 3. 故障注入（S1 Redis 不可达 / S2 容器退出 / S4 网关 502）与恢复
+# 3. 故障注入（S1 Redis 不可达 / S2 容器退出 / S4 网关上游故障，实测 504）与恢复
 powershell -File scripts/demo/faults.ps1 inject S1
 powershell -File scripts/demo/faults.ps1 status S1
 powershell -File scripts/demo/faults.ps1 recover S1

@@ -1,6 +1,7 @@
 """真实模型端到端测试（@pytest.mark.integration：本地可跑、CI 跳过）。
 
 要求环境变量提供凭据：
+- DEEPSEEK_API_KEY（AGENT_PROVIDER=deepseek）或
 - ANTHROPIC_API_KEY（AGENT_PROVIDER=anthropic）或
 - GOOGLE_API_KEY / GEMINI_API_KEY（AGENT_PROVIDER=google）
 
@@ -17,11 +18,12 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
         not (
-            os.environ.get("ANTHROPIC_API_KEY")
+            os.environ.get("DEEPSEEK_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
             or os.environ.get("GOOGLE_API_KEY")
             or os.environ.get("GEMINI_API_KEY")
         ),
-        reason="真实模型验收未完成：缺少 ANTHROPIC_API_KEY / GOOGLE_API_KEY（CI 用 fake 模型）",
+        reason="真实模型验收未完成：缺少 DEEPSEEK/ANTHROPIC/GOOGLE API Key（CI 用 fake 模型）",
     ),
 ]
 
@@ -43,7 +45,7 @@ async def test_real_model_tool_call_loop(db_engine, db_session_factory) -> None:
 
     runtime, pool = await _make_runtime(db_engine, db_session_factory, settings)
     try:
-        run = await _seed_run(db_session_factory)
+        run = await _seed_run(db_session_factory, db_engine)
         claimed = await claim.claim_next_run(
             db_session_factory, worker_id="real-model-test", lease_ttl_seconds=120
         )
