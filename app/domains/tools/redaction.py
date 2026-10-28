@@ -21,6 +21,29 @@ _REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _REDACTED = "***REDACTED***"
 
+# D4：Prompt Injection 模式检测（知识/日志等不可信文本进入模型上下文前的标记）。
+# 命中不阻断（内容仍按不可信数据返回），但会在 Evidence 摘要/载荷中显式标记，
+# 供审计与 Agent 识别"该内容试图改变我的行为"。
+_INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)ignore\s+(all\s+)?(previous|prior|above|earlier)\s+instructions"),
+    re.compile(r"(?i)disregard\s+(all\s+)?(previous|prior|above)\s+instructions"),
+    re.compile(r"(?i)(you\s+are\s+now|act\s+as|pretend\s+to\s+be)\s+(a|an|the)\s+"),
+    re.compile(r"(?i)(system\s+prompt|developer\s+message|new\s+instructions?)\s*[:：]"),
+    re.compile(r"(?i)(grant|give)\s+(me\s+)?(admin|root|execute|write)\s+(access|permission)"),
+    re.compile(r"忽略(上述|之前|以上|前面)(的)?(所有)?(指令|提示|规则|约束)"),
+    re.compile(r"(你现在是|请扮演|假装你是)(一个)?"),
+    re.compile(r"(授予|给予)(我)?(管理员|执行|写入|root|admin)权限"),
+)
+
+
+def detect_injection(text: str) -> list[str]:
+    """检测不可信文本中的注入模式，返回命中的模式名列表（空 = 未检出）。"""
+    names: list[str] = []
+    for idx, pattern in enumerate(_INJECTION_PATTERNS):
+        if pattern.search(text):
+            names.append(f"injection_pattern_{idx}")
+    return names
+
 
 def redact_text(text: str) -> str:
     """对文本执行凭据模式脱敏。"""

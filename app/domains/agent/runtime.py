@@ -51,7 +51,11 @@ from app.domains.tools.context import (
     RunToolContext,
     ToolBudgetExhausted,
 )
-from app.domains.tools.evidence_quality import classify_evidence, root_cause_capable
+from app.domains.tools.evidence_quality import (
+    EvidenceQuality,
+    classify_evidence,
+    root_cause_capable,
+)
 from app.domains.tools.gateway import ToolGateway
 from app.domains.tools.registry import load_resolution_map
 from app.models import (
@@ -223,6 +227,9 @@ class AgentRuntime:
             {
                 "provider": self._deps.model_handle.provider,
                 "model": self._deps.model_handle.model_name,
+                # D4：执行快照字段（与创建时 model_config 区分，可审计）
+                "prompt_version": settings.agent_prompt_version,
+                "rag_mode": settings.rag_mode,
                 "connector_instances": sorted(configs),
             },
         )
@@ -355,13 +362,20 @@ class AgentRuntime:
             rows = (
                 await session.execute(
                     select(
-                        Evidence.id, Evidence.status, Evidence.error_code, Evidence.data_ref
+                        Evidence.id,
+                        Evidence.status,
+                        Evidence.error_code,
+                        Evidence.data_ref,
+                        Evidence.source_type,
                     ).where(Evidence.run_id == run.id)
                 )
             ).all()
         existing = {row.id for row in rows}
         quality_by_id = {
-            row.id: classify_evidence(row.status, row.error_code, row.data_ref) for row in rows
+            row.id: classify_evidence(
+                row.status, row.error_code, row.data_ref, source_type=row.source_type
+            )
+            for row in rows
         }
         key_findings = report_data.get("key_findings") or []
         for finding in key_findings:
@@ -383,11 +397,20 @@ class AgentRuntime:
                 if not supporting:
                     status = HypothesisStatus.INSUFFICIENT_DATA.value
                     demote_reason = "无有效实时证据"
-                elif not any(
-                    root_cause_capable(quality_by_id[r]) for r in supporting if r in quality_by_id
-                ):
-                    status = HypothesisStatus.INSUFFICIENT_DATA.value
-                    demote_reason = "仅有采集失败或不可判读证据，不构成根因支持"
+                else:
+                    supporting_qualities = [
+                        quality_by_id[r] for r in supporting if r in quality_by_id
+                    ]
+                    if not any(root_cause_capable(q) for q in supporting_qualities):
+                        status = HypothesisStatus.INSUFFICIENT_DATA.value
+                        if all(q is EvidenceQuality.KNOWLEDGE for q in supporting_qualities):
+                            # D4 红线：历史知识只引导排查，绝不单独证明当前根因
+                            demote_reason = (
+                                "仅有历史知识（source_type=knowledge）支撑——历史相似性"
+                                "不构成当前实时根因证据，需本 Run 实时业务观测"
+                            )
+                        else:
+                            demote_reason = "仅有采集失败或不可判读证据，不构成根因支持"
             if is_unknown and status == HypothesisStatus.SUPPORTED.value:
                 # unknown 报告不得存在 supported 根因（CONTRACTS §2.16）
                 status = HypothesisStatus.INSUFFICIENT_DATA.value
@@ -487,6 +510,7 @@ class AgentRuntime:
                     "provider": self._deps.model_handle.provider,
                     "model": self._deps.model_handle.model_name,
                     "prompt_version": deps.settings.agent_prompt_version,
+                    "rag_mode": deps.settings.rag_mode,
                 },
                 generated_at=datetime.now(UTC),
             )
@@ -567,6 +591,7 @@ class AgentRuntime:
                     "provider": self._deps.model_handle.provider,
                     "model": self._deps.model_handle.model_name,
                     "prompt_version": deps.settings.agent_prompt_version,
+                    "rag_mode": deps.settings.rag_mode,
                 },
                 generated_at=datetime.now(UTC),
             )
@@ -591,6 +616,7 @@ class AgentRuntime:
             connector_configs={},
             all_assets=bool(snapshot.get("all_assets")),
             instance_map=instance_map,
+            rag_mode=deps.settings.rag_mode,
             lease_fence=execution.lease_fence,
         )
         configs = {

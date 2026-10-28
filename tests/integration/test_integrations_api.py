@@ -212,7 +212,7 @@ async def test_registry_synced_at_startup(client, db_session_factory) -> None:
     """lifespan 同步内置 manifest → capability_manifests 落库且兼容字段齐备。"""
     async with db_session_factory() as session:
         manifests = (await session.execute(select(CapabilityManifest))).scalars().all()
-    assert len(manifests) == 6  # redis/docker/http/prom/otel/mysql
+    assert len(manifests) == 7  # redis/docker/http/prom/otel/mysql + knowledge(D4)
     for m in manifests:
         assert m.manifest["read_only"] is True
         assert m.manifest["compatibility"]["platform_version"]

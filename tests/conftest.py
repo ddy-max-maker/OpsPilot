@@ -39,6 +39,8 @@ os.environ["WEBHOOK_ALERTS_SECRET"] = "test-webhook-secret-0123456789abcdef"
 os.environ["BOOTSTRAP_ADMIN_USERNAME"] = ADMIN_BOOT_USERNAME
 os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = ADMIN_BOOT_PASSWORD
+# D4：测试一律用确定性 Fake Embedding（不联网下载模型）；RAG 相关测试按需覆盖
+os.environ.setdefault("EMBEDDING_PROVIDER", "fake")
 
 # ---- 2. 导入 app（Settings 以测试环境变量缓存）----
 import httpx  # noqa: E402
@@ -61,7 +63,9 @@ ALL_TABLES = (
     "incidents, alerts, audit_events, api_idempotency_keys, outbox_events, "
     "investigation_runs, run_events, evidence, hypotheses, diagnostic_reports, "
     "connector_types, connector_instances, secret_refs, "
-    "capability_manifests, capability_test_runs, asset_observability_bindings"
+    "capability_manifests, capability_test_runs, asset_observability_bindings, "
+    "knowledge_documents, knowledge_versions, knowledge_chunks, knowledge_embeddings, "
+    "retrieval_events, runbooks, runbook_versions"
 )
 
 

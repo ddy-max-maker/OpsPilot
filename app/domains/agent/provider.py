@@ -34,7 +34,8 @@ class ModelHandle:
             "provider": self.provider,
             "model_name": self.model_name,
             "prompt_version": settings.agent_prompt_version,
-            "rag": "off",  # D2 禁区：无 RAG（IMPLEMENTATION_PLAN §2.3）
+            # D4：RAG 开关随 run 快照留档（评估复现锚点；CONTRACTS §2.4）
+            "rag": settings.rag_mode,
         }
 
 

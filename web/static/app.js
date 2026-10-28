@@ -804,6 +804,152 @@ function setActiveNav(key) {
   });
 }
 
+// ---- D4：知识库管理 ----
+
+const KB_STATUS_LABELS = {
+  draft: "草稿", reviewed: "已复核", published: "已发布", superseded: "已替代", retired: "已退役",
+};
+
+async function loadKnowledgeView() {
+  $app.innerHTML = '<div class="card"><h2>知识库</h2><p class="muted">加载中…</p></div>';
+  let data;
+  try {
+    data = await api("/knowledge/documents");
+  } catch (err) { showError(err); return; }
+  const docs = (data && data.documents) || [];
+
+  const rows = docs.map((d) => {
+    const versions = (d.versions || []).map((v) => `
+      <tr>
+        <td>v${v.version_no}</td>
+        <td><span class="badge">${esc(KB_STATUS_LABELS[v.status] || v.status)}</span></td>
+        <td>${esc(v.reviewed_by || "-")}</td>
+        <td>${esc(v.embedding_model_version || "-")}</td>
+        <td>${fmtTime(v.published_at)}</td>
+        <td class="actions">
+          ${v.status === "draft" ? `<button class="btn" data-kb-review="${esc(v.id)}">复核</button>
+          <button class="btn ghost" data-kb-retire="${esc(v.id)}">退役</button>` : ""}
+          ${v.status === "reviewed" ? `<button class="btn primary" data-kb-publish="${esc(v.id)}">发布</button>
+          <button class="btn ghost" data-kb-retire="${esc(v.id)}">退役</button>` : ""}
+          ${v.status === "published" ? `<button class="btn ghost" data-kb-retire="${esc(v.id)}">退役</button>` : ""}
+        </td>
+      </tr>`).join("");
+    return `
+      <div class="card">
+        <div class="row between">
+          <div><strong>${esc(d.title)}</strong>
+            <span class="badge muted">${esc(d.doc_type)}</span>
+            ${d.source_incident_id ? `<span class="badge muted">来源 ${esc(d.source_incident_id)}</span>` : ""}
+          </div>
+        </div>
+        <table class="table">
+          <thead><tr><th>版本</th><th>状态</th><th>复核人</th><th>Embedding</th><th>发布时间</th><th>操作</th></tr></thead>
+          <tbody>${versions || '<tr><td colspan="6" class="muted">（无版本）</td></tr>'}</tbody>
+        </table>
+      </div>`;
+  }).join("");
+
+  $app.innerHTML = `
+    <div class="card">
+      <h2>知识检索（权限过滤 + 服务端 RAG 模式）</h2>
+      <div class="row">
+        <input id="kb-search-query" class="input" placeholder="关键词…" />
+        <button id="kb-search-btn" class="btn primary">检索</button>
+      </div>
+      <div id="kb-search-results"></div>
+    </div>
+    <div class="card">
+      <h2>创建知识草稿</h2>
+      <div class="form-grid">
+        <label>类型
+          <select id="kb-new-type" class="input">
+            <option value="postmortem">postmortem（复盘）</option>
+            <option value="guide">guide（指南）</option>
+            <option value="runbook">runbook（手册知识）</option>
+          </select>
+        </label>
+        <label>标题<input id="kb-new-title" class="input" placeholder="例：Redis 连接池耗尽复盘" /></label>
+        <label class="full">内容<textarea id="kb-new-content" class="input" rows="4" placeholder="故障现象 / 根因 / 处理步骤…"></textarea></label>
+        <label class="full">适用资产 ID（逗号分隔，留空 = 通用知识）<input id="kb-new-assets" class="input" placeholder="as_xxx, as_yyy" /></label>
+      </div>
+      <button id="kb-new-btn" class="btn primary">创建草稿（draft）</button>
+      <p class="muted">草稿须经其他管理员复核（四眼）后才能发布；Agent 不可检索未发布知识。</p>
+    </div>
+    ${rows || '<div class="card"><p class="muted">暂无知识文档</p></div>'}
+    <div class="card">
+      <h2>Runbook（受控操作模板）</h2>
+      <div id="kb-runbooks"><p class="muted">加载中…</p></div>
+    </div>`;
+
+  document.getElementById("kb-search-btn").addEventListener("click", doKnowledgeSearch);
+  document.getElementById("kb-new-btn").addEventListener("click", doKnowledgeCreate);
+  $app.querySelectorAll("[data-kb-review]").forEach((b) =>
+    b.addEventListener("click", () => doKnowledgeAction("review", b.dataset.kbReview)));
+  $app.querySelectorAll("[data-kb-publish]").forEach((b) =>
+    b.addEventListener("click", () => doKnowledgeAction("publish", b.dataset.kbPublish)));
+  $app.querySelectorAll("[data-kb-retire]").forEach((b) =>
+    b.addEventListener("click", () => doKnowledgeAction("retire", b.dataset.kbRetire)));
+
+  try {
+    const rbs = await api("/runbooks");
+    const box = document.getElementById("kb-runbooks");
+    const items = (rbs && rbs.runbooks) || [];
+    box.innerHTML = items.length ? `<table class="table">
+      <thead><tr><th>名称</th><th>状态</th><th>风险</th><th>版本</th></tr></thead>
+      <tbody>${items.map((r) => `<tr>
+        <td>${esc(r.name)}</td><td>${esc(KB_STATUS_LABELS[r.status] || r.status)}</td>
+        <td>${esc(r.risk_level)}</td>
+        <td>${(r.versions || []).map((v) => `v${v.version_no}(${v.status})`).join("、")}</td>
+      </tr>`).join("")}</tbody></table>`
+      : '<p class="muted">暂无 Runbook</p>';
+  } catch (err) { /* runbook 加载失败不影响知识页 */ }
+}
+
+async function doKnowledgeSearch() {
+  const query = document.getElementById("kb-search-query").value.trim();
+  const box = document.getElementById("kb-search-results");
+  if (!query) { toast("请输入检索关键词", true); return; }
+  box.innerHTML = '<p class="muted">检索中…</p>';
+  try {
+    const data = await api("/knowledge/search?query=" + encodeURIComponent(query) + "&limit=5");
+    const hits = data.hits || [];
+    box.innerHTML = `<p class="muted">模式 ${esc(data.mode)} · 耗时 ${data.latency_ms}ms · 命中 ${hits.length}</p>` +
+      (hits.length ? `<table class="table">
+        <thead><tr><th>标题</th><th>类型</th><th>版本</th><th>排名</th><th>内容</th></tr></thead>
+        <tbody>${hits.map((h) => `<tr>
+          <td>${esc(h.title)}</td><td>${esc(h.doc_type)}</td><td>v${h.version_no}</td>
+          <td>#${h.final_rank}</td><td class="muted">${esc(h.content.slice(0, 120))}…</td>
+        </tr>`).join("")}</tbody></table>` : '<p class="muted">无匹配结果</p>');
+  } catch (err) { showError(err); box.innerHTML = ""; }
+}
+
+async function doKnowledgeCreate() {
+  const body = {
+    doc_type: document.getElementById("kb-new-type").value,
+    title: document.getElementById("kb-new-title").value.trim(),
+    content: document.getElementById("kb-new-content").value,
+    applies_to: {
+      asset_ids: document.getElementById("kb-new-assets").value.split(",")
+        .map((s) => s.trim()).filter(Boolean),
+      environments: [], asset_tags: [], service_versions: [],
+    },
+  };
+  if (!body.title || !body.content) { toast("标题与内容必填", true); return; }
+  try {
+    await api("/knowledge/documents", { method: "POST", body });
+    toast("知识草稿已创建（draft）");
+    await loadKnowledgeView();
+  } catch (err) { showError(err); }
+}
+
+async function doKnowledgeAction(action, versionId) {
+  try {
+    await api(`/knowledge/versions/${versionId}/${action}`, { method: "POST" });
+    toast(action === "review" ? "复核完成" : action === "publish" ? "已发布" : "已退役");
+    await loadKnowledgeView();
+  } catch (err) { showError(err); }
+}
+
 async function route() {
   const hash = location.hash || "";
   if (!token) {
@@ -833,6 +979,9 @@ async function route() {
   } else if (hash === "#/integrations") {
     setActiveNav("integrations");
     await loadIntegrationsView();
+  } else if (hash === "#/knowledge") {
+    setActiveNav("knowledge");
+    await loadKnowledgeView();
   } else if (hash === "#/audit") {
     setActiveNav("audit");
     await loadAuditView();

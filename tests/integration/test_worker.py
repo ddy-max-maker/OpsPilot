@@ -516,6 +516,9 @@ def test_gateway_tool_surface_readonly(db_session_factory, worker_settings) -> N
         "query_metrics",
         "query_traces",
         "read_mysql_diagnostics",
+        # D4：知识检索能力面（RAG）
+        "retrieve_incidents",
+        "search_runbooks",
     }
     assert "execute" not in names
     assert "task" not in names

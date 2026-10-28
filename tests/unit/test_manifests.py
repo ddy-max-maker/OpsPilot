@@ -44,4 +44,7 @@ def test_capability_keys_unique() -> None:
         "query_metrics",
         "query_traces",
         "read_mysql_diagnostics",
+        # D4：知识检索（RAG）
+        "retrieve_incidents",
+        "search_runbooks",
     }

@@ -126,6 +126,8 @@ class RunToolContext:
     rate_state: dict[str, float] = field(default_factory=dict)
     # D3：Capability Registry 实例解析表（按授权资产解析，修复同类多实例覆盖）
     instance_map: Any | None = None
+    # D4：RAG 检索模式（执行时真实值 off/text-only/hybrid；知识工具按此决定可用性）
+    rag_mode: str = "off"
     # D2.1 fencing：旧 Worker 失去租约后，Gateway 证据落库前校验（None = 测试直连）
     lease_fence: LeaseFence | None = None
     _seq: int = 0

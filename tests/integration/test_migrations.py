@@ -72,11 +72,19 @@ def test_alembic_upgrade_and_downgrade_cycle() -> None:
             "capability_manifests",
             "capability_test_runs",
             "asset_observability_bindings",
+            # D4：知识库与 RAG 表族
+            "knowledge_documents",
+            "knowledge_versions",
+            "knowledge_chunks",
+            "knowledge_embeddings",
+            "retrieval_events",
+            "runbooks",
+            "runbook_versions",
             "incidents",
             "alerts",
         ):
             assert expected in tables, expected
-        assert version is not None and version[0] == "0003_d3_registry"
+        assert version is not None and version[0] == "0004_d4_knowledge"
         assert schemas == {"langgraph"}  # ADR-5
 
         # head → base：可完整回滚

@@ -85,6 +85,19 @@ async def query_traces(
             error_code="OTEL_BAD_RESPONSE",
         )
     data = body.get("data") or []
+    # D4 安全修复：两条路径（trace_id 精确查询 + 服务搜索）均只保留涉及
+    # 授权服务的链路；精确查询下全部不属于授权服务时明确拒绝。
+    owned = [t for t in data if _trace_has_service(t, service)]
+    if trace_id and data and not owned:
+        return ConnectorResult(
+            status=EvidenceStatus.UNAVAILABLE,
+            payload={
+                "reason": "trace does not involve the authorized service",
+                "authorized_service": service,
+            },
+            error_code="TRACE_SERVICE_NOT_AUTHORIZED",
+        )
+    data = owned
     if not data:
         return ConnectorResult(
             status=EvidenceStatus.OK,
@@ -94,6 +107,12 @@ async def query_traces(
         status=EvidenceStatus.OK,
         payload={"traces": [_summarize_trace(t) for t in data[:_RECENT_LIMIT]]},
     )
+
+
+def _trace_has_service(trace: dict[str, Any], service: str) -> bool:
+    """校验链路的 process 服务名是否包含授权服务（防跨服务越权读取）。"""
+    processes = trace.get("processes") or {}
+    return any((p or {}).get("serviceName") == service for p in processes.values())
 
 
 def _summarize_trace(trace: dict[str, Any]) -> dict[str, Any]:

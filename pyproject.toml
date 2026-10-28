@@ -30,6 +30,21 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.13.0",
 ]
+# D4：本地 Embedding（默认 local_e5 = intfloat/multilingual-e5-small，384 维）；
+# CI 使用确定性 Fake Embedding，不安装本组（不联网下载模型）。
+# torch 固定 CPU 轮子（PyTorch CPU 索引）——避免 CUDA 版多 GB 下载，推理在 CPU 进行。
+embedding = [
+    "sentence-transformers>=3.0.0",
+    "torch>=2.9.0",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
@@ -72,7 +87,7 @@ warn_unused_ignores = true
 warn_return_any = true
 
 [[tool.mypy.overrides]]
-module = ["uvicorn", "alembic.*", "aiomysql", "pymysql"]
+module = ["uvicorn", "alembic.*", "aiomysql", "pymysql", "sentence_transformers"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

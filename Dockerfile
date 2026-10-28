@@ -11,12 +11,13 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 # 先装依赖（利用层缓存：仅 pyproject/lock 变化才重装）
+# D4：--group embedding（sentence-transformers，本地 e5 向量，RAG hybrid 运行时使用）
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev --group embedding
 
 # 再装项目本身
 COPY . .
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --group embedding
 
 EXPOSE 8000
 

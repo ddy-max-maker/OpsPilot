@@ -52,6 +52,7 @@ class AgentWorker:
         self._session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
         self._gateway = ToolGateway(self._session_factory, settings)
         self._runtime: AgentRuntime | None = None
+        self._model_handle: Any | None = None
         self._stop = asyncio.Event()
 
     # ---- 生命周期 ----
@@ -75,7 +76,10 @@ class AgentWorker:
         self._checkpointer = checkpointer
 
         if self._settings.agent_provider == AgentProvider.FAKE.value:
-            model: Any = FakeDiagnoserChatModel(model_name=self._settings.agent_model_name)
+            model: Any = FakeDiagnoserChatModel(
+                model_name=self._settings.agent_model_name,
+                include_knowledge_steps=self._settings.rag_mode != "off",
+            )
             handle = ModelHandle(model, provider="fake", model_name=self._settings.agent_model_name)
             logger.warning(
                 "AGENT_PROVIDER=fake：使用确定性脚本模型（报告由真实工具结果合成）；"
@@ -83,6 +87,7 @@ class AgentWorker:
             )
         else:
             handle = build_chat_model(self._settings)
+        self._model_handle = handle
         from app.domains.agent.runtime import RuntimeDeps  # noqa: PLC0415
 
         deps = RuntimeDeps(
@@ -168,6 +173,24 @@ class AgentWorker:
             worker_id=self._worker_id,
         )
         events = await RunEventWriter.create(self._session_factory, run_id, lease_fence=lease_fence)
+
+        # D4 安全修复③：实际执行快照（Worker 认领时落库，可审计——
+        # 不能只依赖 run 创建时的 model_config；fencing 校验防止旧 Worker 写入）
+        handle = self._model_handle
+        if handle is not None:
+            await claim.record_execution_snapshot(
+                self._session_factory,
+                run_id=run_id,
+                fence_token=fence_token,
+                snapshot={
+                    "provider": handle.provider,
+                    "model": handle.model_name,
+                    "prompt_version": self._settings.agent_prompt_version,
+                    "rag_mode": self._settings.rag_mode,
+                    "worker_id": self._worker_id,
+                    "fence_token": fence_token,
+                },
+            )
 
         # 后台心跳：与模型调用解耦续租（长推理不再受 lease TTL 限制）；
         # 续租失败（fence 失效/终态）→ lease_lost 置位 → 步进循环尽快中止

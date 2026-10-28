@@ -35,7 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        # D4：pgvector 官方镜像（与 docker-compose 一致）
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: opspilot
           POSTGRES_PASSWORD: opspilot
@@ -59,6 +60,9 @@ jobs:
       # 真实模型验收测试（test_real_model.py）因无凭据自动跳过，见测试内 skipif 标记
       AGENT_PROVIDER: fake
       AGENT_MODEL_NAME: fake-diagnoser
+      # D4：CI 使用确定性 Fake Embedding + RAG off（真实 e5 验收单独执行，不进 CI）
+      EMBEDDING_PROVIDER: fake
+      RAG_MODE: off
 
     steps:
       - uses: actions/checkout@v4
@@ -99,6 +103,17 @@ jobs:
           grep -q "capability_manifests" /tmp/tables.txt
           grep -q "capability_test_runs" /tmp/tables.txt
           grep -q "asset_observability_bindings" /tmp/tables.txt
+          # D4：知识库与 RAG 表 + pgvector 扩展
+          grep -q "knowledge_documents" /tmp/tables.txt
+          grep -q "knowledge_versions" /tmp/tables.txt
+          grep -q "knowledge_chunks" /tmp/tables.txt
+          grep -q "knowledge_embeddings" /tmp/tables.txt
+          grep -q "retrieval_events" /tmp/tables.txt
+          grep -q "runbooks" /tmp/tables.txt
+          grep -q "runbook_versions" /tmp/tables.txt
+          psql -h localhost -U opspilot -d opspilot -c "\dx" | grep -q "vector"
+          # HNSW 索引按契约存在
+          psql -h localhost -U opspilot -d opspilot -c "\di ix_knowledge_embeddings_hnsw" | grep -q "hnsw"
           # D2：langgraph 独立 schema（checkpoint 存储，ADR-5）
           psql -h localhost -U opspilot -d opspilot -c "\dn langgraph" | grep -q "langgraph"
 

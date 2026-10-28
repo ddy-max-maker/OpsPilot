@@ -189,3 +189,11 @@ class AgentProvider(StrEnum):
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
     DEEPSEEK = "deepseek"  # D2.1：OpenAI 兼容官方集成（langchain-deepseek）
+
+
+class RagMode(StrEnum):
+    """RAG 检索模式（CONTRACTS §2.4 model_config.rag；run.model_config 快照留档）。"""
+
+    OFF = "off"
+    TEXT_ONLY = "text-only"
+    HYBRID = "hybrid"

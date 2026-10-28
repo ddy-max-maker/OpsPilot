@@ -1,0 +1,2477 @@
+[
+  {
+    "mode": "off",
+    "scenario": "S1",
+    "incident_id": "inc_01m613287w2ch6t5h91gs4srkq",
+    "run_id": "run_01m613288kvmty7mc16d2ewd1m",
+    "run_status": "completed",
+    "stop_reason": "completed",
+    "usage": {
+      "tokens_in": 28970,
+      "tokens_out": 3316,
+      "iterations_used": 17,
+      "tool_calls_used": 10
+    },
+    "report": {
+      "id": "rpt_01m61331sg1t9sm9mgcmyg7nz3",
+      "run_id": "run_01m613288kvmty7mc16d2ewd1m",
+      "version_no": 1,
+      "status": "final",
+      "conclusion": {
+        "summary": "Redis 主资产 as_demo_redis 的连接被观测为超时不可达；容器 inspect 显示其处于 exited 状态（exit_code=0、running=False），日志中出现受控的 SIGTERM 优雅关闭序列且无 OOM/崩溃/重启记录。即：直接原因是 Redis 进程已停止且未恢复运行，但触发停止的操作来源在本 Run 中无实时证据。",
+        "key_findings": [
+          {
+            "detail": "check_redis_health 返回 status=error, REDIS_ERROR: TimeoutError，与事件描述的『Redis 连接不可达』一致，属真实故障观测。",
+            "finding": "Redis 端点实时观测为不可达（超时）",
+            "evidence_ids": [
+              "ev_01m6132gjqp14zcgtga4m2x9sh"
+            ]
+          },
+          {
+            "detail": "docker.inspect: container_id=3187daf6...，state=exited，running=False，exit_code=0，finished_at=2026-10-28T11:05:29Z，started_at=2026-10-27T16:48:02Z。这直接解释了连接超时。",
+            "finding": "Redis 容器当前未运行，状态为 exited",
+            "evidence_ids": [
+              "ev_01m6132dnv3zcm4q1dz42b8avz"
+            ]
+          },
+          {
+            "detail": "oom_killed=False，restart_count=0，exit_code=0；日志显示 '1:signal-handler (...) Received SIGTERM scheduling shutdown...' 与 'User requested shutdown...' / 'DB saved on disk' / 'Ready to accept connections tcp' 等正常启停循环，无 panic、无错误栈、无内存淘汰告警。",
+            "finding": "容器非 OOM、非崩溃循环，属受控优雅关闭",
+            "evidence_ids": [
+              "ev_01m6132dnv3zcm4q1dz42b8avz",
+              "ev_01m6132hmqtrtpp7fsbc77zy0g"
+            ]
+          },
+          {
+            "detail": "get_service_health 返回 HEALTH_URL_NOT_REGISTERED，与事件中『health_url=未登记』一致，属采集受限而非业务异常。",
+            "finding": "健康检查端点未登记，HTTP 层健康维度无法取证",
+            "evidence_ids": [
+              "ev_01m6132hkr3z7d76477pbem315"
+            ]
+          },
+          {
+            "detail": "两次 query_metrics 均返回 METRIC_TEMPLATE_NOT_ALLOWED，实例 allowlist 不含所请求模板，故连接数/连接池等 Redis 基线指标未能采集。",
+            "finding": "指标维度取证失败（模板不在允许清单）",
+            "evidence_ids": [
+              "ev_01m6132jz3tz5fskphwqffzedp",
+              "ev_01m6132ksb3pm75732bppp8ab9"
+            ]
+          },
+          {
+            "detail": "query_traces 返回 traces=[]，note=no traces matched，无法从链路侧获得调用方报错或上游定位信息。",
+            "finding": "链路查询无匹配数据",
+            "evidence_ids": [
+              "ev_01m6132jzdzbh5bae1b9djdk2m"
+            ]
+          },
+          {
+            "detail": "retrieve_incidents 与 search_runbooks 均返回 RAG_DISABLED（rag_mode=off），本次运行在无知识注入的情况下完成；因此本 Run 未获得历史线索，也无任何历史证据可支撑根因。",
+            "finding": "历史知识检索不可用，与事件『历史经验有帮助』的设计预期存在差异",
+            "evidence_ids": [
+              "ev_01m6132dmcped0bbvkkgfdhcez",
+              "ev_01m6132dme3wjfzrkqn9zfjmyp"
+            ]
+          },
+          {
+            "detail": "read_mysql_diagnostics 返回 ASSET_TYPE_OUT_OF_MANIFEST_SCOPE（error，非 evidence），属工具与资产类型不匹配，不重试。",
+            "finding": "MySQL 诊断工具对该资产不适用",
+            "evidence_ids": []
+          }
+        ],
+        "next_manual_steps": [
+          "人工核对 Redis 容器停止的发起方与时间点（编排/变更系统审计），确认是否为计划内停止或实验清理动作。",
+          "确认 D4 消融实验是否本应保持 Redis 运行；若是环境准备缺失，按实验规范重新准备环境（不由本 Agent 执行）。",
+          "若判定为误停，由有权限人员按 Runbook 恢复 Redis 实例并验证 PING 与客户端连接。",
+          "采集调用方服务在故障窗口内的错误日志，确认其失败模式为『连接被拒绝/超时』而非连接池内部问题。",
+          "将 Redis 关键指标模板（connected_clients、used_memory、evicted_keys、rejected_connections）加入实例 allowlist，以便后续复盘闭环。",
+          "为 Redis 资产登记 health_url 或 TCP 探针，避免后续只能依赖超时判定。",
+          "核查本次运行 rag_mode=off 是否符合事件意图——事件描述假设『历史经验有帮助』，但知识检索在本 Run 中不可用，历史对照结论无法得出。"
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "hyp_01m61331rycx2ppb6cgvksapj3",
+          "rank": 1,
+          "statement": "Redis 服务进程已停止（容器 exited，受 SIGTERM 优雅关闭）且未恢复，导致客户端连接超时不可达。",
+          "status": "supported",
+          "supporting_evidence_ids": [
+            "ev_01m6132gjqp14zcgtga4m2x9sh",
+            "ev_01m6132dnv3zcm4q1dz42b8avz",
+            "ev_01m6132hmqtrtpp7fsbc77zy0g"
+          ],
+          "contradicting_evidence_ids": [],
+          "missing_information": [
+            "谁/哪条编排或人工操作发送了 SIGTERM（变更单、k8s events、docker stop 调用方审计）",
+            "容器停止原因是否属于计划内缩容/实验清理，还是误操作"
+          ],
+          "confidence": "high",
+          "created_at": "2026-10-28T11:07:26.383502Z"
+        },
+        {
+          "id": "hyp_01m61331rycx2ppb6cgvksapj4",
+          "rank": 2,
+          "statement": "关闭是计划内的受控动作而非故障（exit_code=0、oom_killed=False、restart_count=0、日志为优雅 shutdown），因此『故障』更可能是依赖该 Redis 的调用方未随停止同步调整。",
+          "status": "supported",
+          "supporting_evidence_ids": [
+            "ev_01m6132dnv3zcm4q1dz42b8avz",
+            "ev_01m6132hmqtrtpp7fsbc77zy0g"
+          ],
+          "contradicting_evidence_ids": [],
+          "missing_information": [
+            "调用方服务清单及其在 Redis 停止期间的错误日志",
+            "本实验（D4 消融）预期的 Redis 运行状态基线"
+          ],
+          "confidence": "medium",
+          "created_at": "2026-10-28T11:07:26.383502Z"
+        },
+        {
+          "id": "hyp_01m61331rycx2ppb6cgvksapj5",
+          "rank": 3,
+          "statement": "Redis 连接池耗尽 / 连接数打满导致不可达。",
+          "status": "refuted",
+          "supporting_evidence_ids": [],
+          "contradicting_evidence_ids": [
+            "ev_01m6132dnv3zcm4q1dz42b8avz",
+            "ev_01m6132hmqtrtpp7fsbc77zy0g"
+          ],
+          "missing_information": [
+            "Redis INFO clients / connected_clients 指标（本 Run 因模板不在 allowlist 未能取证）"
+          ],
+          "confidence": "medium",
+          "created_at": "2026-10-28T11:07:26.383502Z"
+        },
+        {
+          "id": "hyp_01m61331rycx2ppb6cgvksapj6",
+          "rank": 4,
+          "statement": "Redis 因内存超限被 OOM Killer 杀死或发生崩溃。",
+          "status": "refuted",
+          "supporting_evidence_ids": [],
+          "contradicting_evidence_ids": [
+            "ev_01m6132dnv3zcm4q1dz42b8avz",
+            "ev_01m6132hmqtrtpp7fsbc77zy0g"
+          ],
+          "missing_information": [],
+          "confidence": "high",
+          "created_at": "2026-10-28T11:07:26.383502Z"
+        },
+        {
+          "id": "hyp_01m61331rycx2ppb6cgvksapj7",
+          "rank": 5,
+          "statement": "网络层/网关侧阻断导致 502/504 类上游不可达。",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [],
+          "contradicting_evidence_ids": [
+            "ev_01m6132jzdzbh5bae1b9djdk2m"
+          ],
+          "missing_information": [
+            "调用方侧的网关/客户端错误日志与状态码分布",
+            "网络连通性探测结果（本 Run 无该工具权限）"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:07:26.383502Z"
+        }
+      ],
+      "evidence_refs": [
+        "ev_01m6132dmcped0bbvkkgfdhcez",
+        "ev_01m6132dme3wjfzrkqn9zfjmyp",
+        "ev_01m6132dnv3zcm4q1dz42b8avz",
+        "ev_01m6132gjqp14zcgtga4m2x9sh",
+        "ev_01m6132hkr3z7d76477pbem315",
+        "ev_01m6132hmqtrtpp7fsbc77zy0g",
+        "ev_01m6132jz3tz5fskphwqffzedp",
+        "ev_01m6132jzdzbh5bae1b9djdk2m",
+        "ev_01m6132ksb3pm75732bppp8ab9"
+      ],
+      "unknown_note": {
+        "reason": null,
+        "is_unknown": false,
+        "missing_information": [
+          "容器停止的发起方与操作审计（编排控制器、变更单、人工 docker stop 记录）",
+          "本 D4 消融实验对 Redis 应处运行状态的预期基线",
+          "调用方服务清单及其在故障窗口内的错误日志",
+          "Redis 连接数与内存指标（需把对应 PromQL 模板加入实例 allowlist）",
+          "为何本次运行 rag_mode=off，是否为本事件预期的知识检索开关状态"
+        ]
+      },
+      "generator": {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+        "rag_mode": "off",
+        "prompt_version": "d2-v1"
+      },
+      "generated_at": "2026-10-28T11:07:26.384812Z",
+      "created_at": "2026-10-28T11:07:26.383502Z"
+    },
+    "evidence": [
+      {
+        "id": "ev_01m6132dmcped0bbvkkgfdhcez",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "unavailable",
+        "summary": "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge"
+      },
+      {
+        "id": "ev_01m6132dme3wjfzrkqn9zfjmyp",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "unavailable",
+        "summary": "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge"
+      },
+      {
+        "id": "ev_01m6132dnv3zcm4q1dz42b8avz",
+        "source_type": "infra",
+        "collector": "docker.inspect",
+        "status": "ok",
+        "summary": "docker.inspect OK: container_id=3187daf6ae86714360e8d6494086871e2b6aae1d2976ab6610f4f4d678284638, error=, exit_code=0, finished_at=2026-10-28T11:05:29.829366948Z, oom_killed=False, restart_count=0, ru"
+      },
+      {
+        "id": "ev_01m6132gjqp14zcgtga4m2x9sh",
+        "source_type": "health",
+        "collector": "redis.health",
+        "status": "error",
+        "summary": "redis.health error (REDIS_ERROR): TimeoutError"
+      },
+      {
+        "id": "ev_01m6132hkr3z7d76477pbem315",
+        "source_type": "health",
+        "collector": "http.health_check",
+        "status": "unavailable",
+        "summary": "http.health_check unavailable (HEALTH_URL_NOT_REGISTERED): asset has no registered health_url"
+      },
+      {
+        "id": "ev_01m6132hmqtrtpp7fsbc77zy0g",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=3187daf6ae86714360e8d6494086871e2b6aae1d2976ab6610f4f4d678284638, logs=['1:C 27 Oct 2026 13:03:41.186 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo', '1:C 27 Oct 2026 13"
+      },
+      {
+        "id": "ev_01m6132jz3tz5fskphwqffzedp",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "unavailable",
+        "summary": "prometheus.query unavailable (METRIC_TEMPLATE_NOT_ALLOWED): metric template 'redis_connection_baseline' not in instance allowlist"
+      },
+      {
+        "id": "ev_01m6132jzdzbh5bae1b9djdk2m",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: note=no traces matched (service/time range), traces=[]"
+      },
+      {
+        "id": "ev_01m6132ksb3pm75732bppp8ab9",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "unavailable",
+        "summary": "prometheus.query unavailable (METRIC_TEMPLATE_NOT_ALLOWED): metric template 'container_cpu_usage' not in instance allowlist"
+      }
+    ],
+    "retrieval_events": [],
+    "recorded_at": "2026-10-28T19:07:30+0800"
+  },
+  {
+    "mode": "off",
+    "scenario": "M1",
+    "incident_id": "inc_01m6133mb2bf4y8tg20gk1t9p3",
+    "run_id": "run_01m6133mbsqy3nk03h4gyptna3",
+    "run_status": "needs_human",
+    "stop_reason": "unknown_exit",
+    "usage": {
+      "tokens_in": 24355,
+      "tokens_out": 3659,
+      "iterations_used": 16,
+      "tool_calls_used": 10
+    },
+    "report": {
+      "id": "rpt_01m6134a0jhnyz6begf3zp6r7e",
+      "run_id": "run_01m6133mbsqy3nk03h4gyptna3",
+      "version_no": 1,
+      "status": "final",
+      "conclusion": {
+        "summary": "对 as_demo_mysql 的只读取证显示：MySQL 进程健康运行（running、restart_count=0、未 OOM、退出码 0），实时连接水位为 Threads_connected=42 / max_connections=151（约 28%），未接近连接上限，因此事件标题所称“连接数激增”未能由实时证据证实。Slow_queries=80 且慢查询摘要由 SELECT SLEEP(?) 与 SELECT BENCHMARK 等特征明显的压测/探测语句主导；同时该资产的 Prometheus 指标与链路管道均无任何序列，无法交叉验证趋势。",
+        "key_findings": [
+          {
+            "detail": "status 段显示 Threads_connected=42、Threads_running=43，variable 段显示 max_connections=151，连接使用率约 28%，存在明显余量；Connections 累计 2802、Aborted_connects 2477。",
+            "finding": "实时连接水位未触及上限，与“连接数激增”描述不完全一致",
+            "evidence_ids": [
+              "ev_01m6133r81s4xmmp6cre1cgnaf"
+            ]
+          },
+          {
+            "detail": "Slow_queries=80；slow_digest 首位为 SELECT `SLEEP`(?)（160 次，均值约 20018.974ms 量级、总 125118.59 累计），第二位 SELECT `BENCHMARK`(? , `MD5`(?))（24 次，均值约 26.088），明显偏离正常业务查询形态。",
+            "finding": "存在慢查询，且慢查询主要由 SLEEP/BENCHMARK 类压测或探测语句贡献",
+            "evidence_ids": [
+              "ev_01m6133r81s4xmmp6cre1cgnaf"
+            ]
+          },
+          {
+            "detail": "inspect: running=true, restart_count=0, oom_killed=False, exit_code=0；logs 仅见 MySQL 8.4.13 全新初始化启动记录与自签证书 Warning，无 ERROR/崩溃/连接被拒记录。",
+            "finding": "数据库进程与容器层无崩溃、无重启、无 OOM",
+            "evidence_ids": [
+              "ev_01m6133tfvpr8fe2c1zge1s7y1",
+              "ev_01m6133tfse3c6hz81n3tztq6y"
+            ]
+          },
+          {
+            "detail": "up、process_resident_memory、http_requests_error_rate、http_request_duration_p95 四个模板均返回 result_type=vector 但 series=[]（空序列，非报错）；otel 查询 no traces matched。属采集/埋点缺失，不能据此推断业务健康度。",
+            "finding": "该资产的指标与链路管道均无数据，趋势类判断无法交叉验证",
+            "evidence_ids": [
+              "ev_01m6133r4kxjfqcxkjxezh0xz9",
+              "ev_01m6133r4kxjfqcxkjxezh0xza",
+              "ev_01m6133te39mznt2rssc91yy3b",
+              "ev_01m6133tekxs3astjcs8pwb4m5",
+              "ev_01m6133w7ywgsgw14hcttsxtrd"
+            ]
+          },
+          {
+            "detail": "两次知识检索均返回 RAG_DISABLED（rag_mode=off）。因此本次结论完全基于本 Run 实时证据，无历史经验可对照，也无需处理“历史与实时冲突”的取舍——历史侧无输入。",
+            "finding": "历史知识与 Runbook 在本 Run 不可用，未获得可参照的排查线索",
+            "evidence_ids": [
+              "ev_01m6133r3mb72tfzb31qsb66vg",
+              "ev_01m6133w7nh0717634hck01z4t"
+            ]
+          }
+        ],
+        "next_manual_steps": [
+          "人工核对监控平台（Prometheus/Target 页面）该 MySQL 实例的采集状态，确认 up 为 null 是标签缺失还是 scrape 失败，并补齐 exporter 采集。",
+          "在只读前提下获取事件时间窗内的 Threads_connected / Threads_running 曲线，确认是否曾出现接近 max_connections=151 的尖峰，以验证或推翻“连接数激增”描述。",
+          "核查 sandbox 环境是否有人为压测任务（SELECT SLEEP、SELECT BENCHMARK 特征极强），确认是否属于 D4 消融实验本身施加的负载。",
+          "细分 Aborted_connects=2477 的来源，排除应用侧连接池配置不当或连接泄漏（需授权应用资产后方可观测）。",
+          "若确认存在应用侧连接泄漏，则由应用负责人在非只读授权下复核连接池上限、泄漏检测与使用后归还逻辑，连接数并非本次事件的即时风险点。"
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "hyp_01m6134a026nek6angvtxxq44v",
+          "rank": 1,
+          "statement": "所谓“连接数激增”更可能是事件标签/历史假设与实时状态的偏差：当前连接数远低于上限，实际异常仅为慢查询与偏高的 Aborted_connects",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [
+            "ev_01m6133r81s4xmmp6cre1cgnaf",
+            "ev_01m6133tfvpr8fe2c1zge1s7y1"
+          ],
+          "contradicting_evidence_ids": [],
+          "missing_information": [
+            "缺少连接数历史时间序列，无法判断此前是否出现过接近 151 的尖峰后已回落",
+            "缺少故障发生时刻与本次采集时刻的时间对齐信息",
+            "unknown 报告禁止 supported 根因"
+          ],
+          "confidence": "medium",
+          "created_at": "2026-10-28T11:08:07.569029Z"
+        },
+        {
+          "id": "hyp_01m6134a026nek6angvtxxq44w",
+          "rank": 2,
+          "statement": "慢查询由人为压测/探测语句（SELECT SLEEP、SELECT BENCHMARK）驱动，而非业务侧真实慢 SQL",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [
+            "ev_01m6133r81s4xmmp6cre1cgnaf"
+          ],
+          "contradicting_evidence_ids": [],
+          "missing_information": [
+            "缺少语句来源主机/用户（performance_schema 未提供该维度证据）",
+            "缺少压测任务是否正在运行的调度记录",
+            "unknown 报告禁止 supported 根因"
+          ],
+          "confidence": "medium",
+          "created_at": "2026-10-28T11:08:07.569029Z"
+        },
+        {
+          "id": "hyp_01m6134a026nek6angvtxxq44x",
+          "rank": 3,
+          "statement": "应用侧连接池泄漏/连接风暴导致连接数攀升",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [],
+          "contradicting_evidence_ids": [
+            "ev_01m6133r81s4xmmp6cre1cgnaf"
+          ],
+          "missing_information": [
+            "无授权应用资产，无法观测上游连接池配置与连接获取失败日志",
+            "Aborted_connects=2477 的成因（认证失败/超时/客户端中断）未细分",
+            "缺少链路数据以定位调用方"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:08:07.569029Z"
+        },
+        {
+          "id": "hyp_01m6134a026nek6angvtxxq44y",
+          "rank": 4,
+          "statement": "MySQL 实例资源瓶颈（内存/CPU）引发连接与查询劣化",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [],
+          "contradicting_evidence_ids": [
+            "ev_01m6133tfvpr8fe2c1zge1s7y1"
+          ],
+          "missing_information": [
+            "process_resident_memory 模板返回空序列，无法读取内存占用",
+            "容器未暴露 CPU/内存实时使用率证据"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:08:07.569029Z"
+        }
+      ],
+      "evidence_refs": [
+        "ev_01m6133r3mb72tfzb31qsb66vg",
+        "ev_01m6133r4kxjfqcxkjxezh0xz9",
+        "ev_01m6133r4kxjfqcxkjxezh0xza",
+        "ev_01m6133r81s4xmmp6cre1cgnaf",
+        "ev_01m6133te39mznt2rssc91yy3b",
+        "ev_01m6133tekxs3astjcs8pwb4m5",
+        "ev_01m6133tfse3c6hz81n3tztq6y",
+        "ev_01m6133tfvpr8fe2c1zge1s7y1",
+        "ev_01m6133w7nh0717634hck01z4t",
+        "ev_01m6133w7ywgsgw14hcttsxtrd"
+      ],
+      "unknown_note": {
+        "reason": "实时证据足以说明“当前连接水位远低于上限、容器健康、慢查询主要由 SLEEP/BENCHMARK 类语句贡献”，因此不支持“连接数激增”这一事件描述。但该资产指标与链路管道全为空序列，无法还原事件时间窗内的连接数/查询耗时趋势，也无法定位发起压测或慢查询的具体上游；RAG 关闭亦无历史线索可比对。故根因定位仍需人工补充信息，不下确定性结论。",
+        "is_unknown": true,
+        "missing_information": [
+          "MySQL 侧 Threads_connected / Aborted_connects / Slow_queries 的历史时间序列（确认是否曾逼近 max_connections=151）",
+          "Aborted_connects 的细分原因统计（认证失败、客户端超时、握手中断等）",
+          "慢查询的来源主机、数据库用户与 client 地址（current connections 明细）",
+          "是否有压测/基准测试任务在 sandbox 环境运行及其时间窗口",
+          "故障发生时间与本次取证时间的时间对齐信息",
+          "指标采集链路为何对该资产无数据（服务发现标签、exporter 配置、scrape target 状态）"
+        ]
+      },
+      "generator": {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+        "rag_mode": "off",
+        "prompt_version": "d2-v1"
+      },
+      "generated_at": "2026-10-28T11:08:07.570298Z",
+      "created_at": "2026-10-28T11:08:07.569029Z"
+    },
+    "evidence": [
+      {
+        "id": "ev_01m6133r3mb72tfzb31qsb66vg",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "unavailable",
+        "summary": "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge"
+      },
+      {
+        "id": "ev_01m6133r4kxjfqcxkjxezh0xz9",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m6133r4kxjfqcxkjxezh0xza",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m6133r81s4xmmp6cre1cgnaf",
+        "source_type": "infra",
+        "collector": "mysql.diagnostics",
+        "status": "ok",
+        "summary": "mysql.diagnostics OK: sections={'status': {'rows': [['Threads_connected', '42'], ['Threads_running', '43'], ['Connections', '2802'], ['Aborted_connects', '2477'], ['Slow_queries', '80']], 'row_count':"
+      },
+      {
+        "id": "ev_01m6133te39mznt2rssc91yy3b",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m6133tekxs3astjcs8pwb4m5",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m6133tfse3c6hz81n3tztq6y",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=b9cff400626d66a5662a03404d65de72757fa3185a701b41eb08b0517ecc8a4d, logs=['2026-10-28 04:13:28+00:00 [Note] [Entrypoint]: Entrypoint script for MySQL Server 8.4.13-1.el9 sta"
+      },
+      {
+        "id": "ev_01m6133tfvpr8fe2c1zge1s7y1",
+        "source_type": "infra",
+        "collector": "docker.inspect",
+        "status": "ok",
+        "summary": "docker.inspect OK: container_id=b9cff400626d66a5662a03404d65de72757fa3185a701b41eb08b0517ecc8a4d, error=, exit_code=0, finished_at=0001-01-01T00:00:00Z, oom_killed=False, restart_count=0, running=True"
+      },
+      {
+        "id": "ev_01m6133w7nh0717634hck01z4t",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "unavailable",
+        "summary": "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge"
+      },
+      {
+        "id": "ev_01m6133w7ywgsgw14hcttsxtrd",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: note=no traces matched (service/time range), traces=[]"
+      }
+    ],
+    "retrieval_events": [],
+    "recorded_at": "2026-10-28T19:08:10+0800"
+  },
+  {
+    "mode": "text-only",
+    "scenario": "S1",
+    "incident_id": "inc_01m613629pvzsqg41sttsdhg4z",
+    "run_id": "run_01m61362azmbr7z7es01fq0efm",
+    "run_status": "completed",
+    "stop_reason": "completed",
+    "usage": {
+      "tokens_in": 45112,
+      "tokens_out": 3239,
+      "iterations_used": 22,
+      "tool_calls_used": 14
+    },
+    "report": {
+      "id": "rpt_01m6136wk57q95dzth8w1wwdaq",
+      "run_id": "run_01m61362azmbr7z7es01fq0efm",
+      "version_no": 1,
+      "status": "final",
+      "conclusion": {
+        "summary": "在 sandbox 环境中，Redis 主资产（as_demo_redis）当前无法从观测侧建立连接：两次 Redis 健康检查均返回 REDIS_ERROR / TimeoutError，同时容器 inspect 显示该容器处于 exited 状态（running=false, exit_code=0, restart_count=0, oom_killed=false）。日志显示该 Redis 实例历史上多次因收到 SIGTERM 而执行正常关闭（'User requested shutdown' / 'Redis is now ready to exit'），最近一次正常关闭后未再观测到新的启动成功，因此连接不可达的直接原因是 Redis 服务进程当前未运行。",
+        "key_findings": [
+          {
+            "detail": "两次独立调用 check_redis_health 均返回 status=error，错误为 REDIS_ERROR: TimeoutError；这是对目标 Redis 的真实观测失败，不是偶发抖动。",
+            "finding": "Redis 健康基线两次探测均超时，确认当前连接不可达",
+            "evidence_ids": [
+              "ev_01m61368qgn6p3t1dnaq4vppgn",
+              "ev_01m6136egnn3deqydpr0behe50"
+            ]
+          },
+          {
+            "detail": "两次 inspect 结果一致：running=false, state=exited, exit_code=0, oom_killed=False, restart_count=0；started_at=2026-10-28T11:08:21Z，finished_at=2026-10-28T11:09:04Z。exit_code=0 且无 OOM/重启，说明是受控退出而非资源打爆或进程崩溃。",
+            "finding": "Redis 容器当前不处于运行状态（state=exited），但非崩溃、非 OOM 退出",
+            "evidence_ids": [
+              "ev_01m61365ve7bw6fk7zpk9jav58",
+              "ev_01m6136gtnb0nnbemrrkkt0nq8"
+            ]
+          },
+          {
+            "detail": "日志中多次出现 'Received SIGTERM scheduling shutdown' → 'User requested shutdown' → 'Saving the final RDB snapshot' → 'DB saved on disk' → 'Redis is now ready to exit'；每次启动均为 'Ready to accept connections tcp'。全程无 OOM、无 maxclients/rejected_connections、无慢命令或阻塞类错误。",
+            "finding": "容器日志显示 Redis 反复因 SIGTERM 正常关闭，无内存/连接数错误",
+            "evidence_ids": [
+              "ev_01m61365vdfz68yj5f59g76hft",
+              "ev_01m6136bkh34zwbmdqzy4rr5c7"
+            ]
+          },
+          {
+            "detail": "GET health 返回 HTTP 200，status=UP（diskSpace UP、ping UP）。说明应用进程本身存活，故障局限于 Redis 依赖侧，而非应用整体崩溃；但这不能排除应用连接池层的问题（该假设见下）。",
+            "finding": "下游应用侧（as_demo_java）健康检查为 UP，与 Redis 不可达形成对照",
+            "evidence_ids": [
+              "ev_01m6136fp1170m9jv12qkkh2bz"
+            ]
+          },
+          {
+            "detail": "health_url 未登记（HEALTH_URL_NOT_REGISTERED）；指标模板 redis_up 与 redis_connected_clients 均不在实例白名单（METRIC_TEMPLATE_NOT_ALLOWED）；OTel 无匹配链路（traces=[]）。这些属于采集面限制，不能作为根因证据。",
+            "finding": "多项观测能力缺失，无法交叉验证连接池/客户端指标",
+            "evidence_ids": [
+              "ev_01m6136acqx2hr2vtd78vhvphe",
+              "ev_01m6136acs2jfcdd5h0cam8mmy",
+              "ev_01m6136fkysxg3q43n80g1r9ce",
+              "ev_01m6136ad4fgfqgw1zmymsp088"
+            ]
+          },
+          {
+            "detail": "read_mysql_diagnostics(as_demo_redis) 返回 ASSET_TYPE_OUT_OF_MANIFEST_SCOPE —— 这是资产类型不匹配导致的工具拒绝，非业务故障观测，故未引用为证据。",
+            "finding": "MySQL 诊断对该资产不适用",
+            "evidence_ids": []
+          },
+          {
+            "detail": "历史复盘（Redis 连接池耗尽 / maxclients 过低 / 连接泄漏）指向连接数维度；本次实时日志中完全未见 maxclients、rejected_connections 或连接耗尽痕迹，而容器处于 exited 且为 exit_code=0 的受控关闭。按规则以实时证据为准：连接池耗尽假设在本 Run 未获支持。历史知识仅作下一步排查线索。",
+            "finding": "历史知识提示排查方向，但与本次实时证据存在差异",
+            "evidence_ids": []
+          }
+        ],
+        "next_manual_steps": [
+          "人工核实 as_demo_redis 容器在 2026-10-28T11:09:04Z 前后的变更记录，确认 SIGTERM 是由发布/缩容流水线还是人为操作触发",
+          "若该实例应持续提供服务，按变更流程评估是否需重新拉起（本诊断不做任何写操作/重启）",
+          "服务恢复后复核 Redis PING/INFO 的 connected_clients、maxclients、rejected_connections，以排除连接池耗尽类历史根因",
+          "为 as_demo_redis 登记 health_url 并申请放开 redis 相关指标模板白名单，以提升后续可观测性",
+          "检查 as_demo_java 侧连接池配置与重连/超时日志，确认故障期间是否为连接超时而非业务逻辑错误",
+          "因当前为主资产连通性故障，若容器异常反复退出，进一步查看编排层事件（stop/kill 来源）与最近一次部署版本"
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "hyp_01m6136wjnge475s2jgngx4fjk",
+          "rank": 1,
+          "statement": "Redis 服务进程未运行导致连接不可达：容器已被人工/编排方式正常停止（SIGTERM、exit_code=0），当前无存活实例监听 6379，故客户端连接超时",
+          "status": "supported",
+          "supporting_evidence_ids": [
+            "ev_01m61368qgn6p3t1dnaq4vppgn",
+            "ev_01m6136egnn3deqydpr0behe50",
+            "ev_01m61365ve7bw6fk7zpk9jav58",
+            "ev_01m6136gtnb0nnbemrrkkt0nq8",
+            "ev_01m6136bkh34zwbmdqzy4rr5c7"
+          ],
+          "contradicting_evidence_ids": [],
+          "missing_information": [
+            "由谁/哪个编排动作在 finished_at=2026-10-28T11:09:04Z 触发了 SIGTERM（发布、缩容还是人工停服）",
+            "事故时间窗与容器退出的时间关系确认"
+          ],
+          "confidence": "medium",
+          "created_at": "2026-10-28T11:09:32.131449Z"
+        },
+        {
+          "id": "hyp_01m6136wjnge475s2jgngx4fjm",
+          "rank": 2,
+          "statement": "Redis 连接池耗尽 / maxclients 过低或连接泄漏导致拒绝与超时（历史复盘中的 S1 类根因）",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [
+            "ev_01m61365v5wk0r9xfe7239v80g"
+          ],
+          "contradicting_evidence_ids": [
+            "ev_01m6136bkh34zwbmdqzy4rr5c7",
+            "ev_01m6136gtnb0nnbemrrkkt0nq8"
+          ],
+          "missing_information": [
+            "Redis INFO 中的 connected_clients / rejected_connections / maxclients（当前指标模板不在白名单且服务不可达，无法采集）",
+            "应用侧连接池配置与连接泄漏证据（日志/指标）",
+            "容器已退出，服务不在运行，连接池类指标当前不可观测"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:09:32.131449Z"
+        },
+        {
+          "id": "hyp_01m6136wjnge475s2jgngx4fjn",
+          "rank": 3,
+          "statement": "Redis 单线程被慢命令阻塞/高延迟导致客户端超时（历史复盘提及注入测试文本的那条）",
+          "status": "refuted",
+          "supporting_evidence_ids": [
+            "ev_01m61365v5wk0r9xfe7239v80g"
+          ],
+          "contradicting_evidence_ids": [
+            "ev_01m6136gtnb0nnbemrrkkt0nq8",
+            "ev_01m6136bkh34zwbmdqzy4rr5c7"
+          ],
+          "missing_information": [],
+          "confidence": "medium",
+          "created_at": "2026-10-28T11:09:32.131449Z"
+        },
+        {
+          "id": "hyp_01m6136wjnge475s2jgngx4fjp",
+          "rank": 4,
+          "statement": "Redis 因内存不足被 OOM 杀死导致不可达",
+          "status": "refuted",
+          "supporting_evidence_ids": [],
+          "contradicting_evidence_ids": [
+            "ev_01m61365ve7bw6fk7zpk9jav58",
+            "ev_01m6136gtnb0nnbemrrkkt0nq8"
+          ],
+          "missing_information": [],
+          "confidence": "high",
+          "created_at": "2026-10-28T11:09:32.131449Z"
+        }
+      ],
+      "evidence_refs": [
+        "ev_01m61365v5wk0r9xfe7239v80g",
+        "ev_01m61365vdfz68yj5f59g76hft",
+        "ev_01m61365ve7bw6fk7zpk9jav58",
+        "ev_01m61368qgn6p3t1dnaq4vppgn",
+        "ev_01m6136acqx2hr2vtd78vhvphe",
+        "ev_01m6136acs2jfcdd5h0cam8mmy",
+        "ev_01m6136aczmcp77jxz41wxhjk5",
+        "ev_01m6136ad4fgfqgw1zmymsp088",
+        "ev_01m6136bkh34zwbmdqzy4rr5c7",
+        "ev_01m6136egnn3deqydpr0behe50",
+        "ev_01m6136fkysxg3q43n80g1r9ce",
+        "ev_01m6136fp1170m9jv12qkkh2bz",
+        "ev_01m6136gtnb0nnbemrrkkt0nq8"
+      ],
+      "unknown_note": {
+        "reason": null,
+        "is_unknown": false,
+        "missing_information": [
+          "SIGTERM 的触发方与变更记录（发布/缩容/人工停服），以及完成的准确时间点",
+          "事故开始时间，用于与 finished_at=2026-10-28T11:09:04Z 对齐",
+          "Redis 侧 connected_clients / maxclients / rejected_connections 数据（需指标白名单或服务恢复后再采）",
+          "应用侧（as_demo_java）连接池配置与连接错误日志"
+        ]
+      },
+      "generator": {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+        "rag_mode": "text-only",
+        "prompt_version": "d2-v1"
+      },
+      "generated_at": "2026-10-28T11:09:32.133283Z",
+      "created_at": "2026-10-28T11:09:32.131449Z"
+    },
+    "evidence": [
+      {
+        "id": "ev_01m61365v5wk0r9xfe7239v80g",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=3, hits=[{'version_id': 'kbv_01m61051q7zgmj8ex39mvzwqce', 'document_id': 'kb_01m61051q7zgmj8ex39mvzwqcd', 'doc_type': 'postmortem', 'title': '复盘：Redis 连接池耗尽导致业务超时（S1 类）'"
+      },
+      {
+        "id": "ev_01m61365vdfz68yj5f59g76hft",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=3187daf6ae86714360e8d6494086871e2b6aae1d2976ab6610f4f4d678284638, logs=['1:C 27 Oct 2026 13:03:41.186 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo', '1:C 27 Oct 2026 13"
+      },
+      {
+        "id": "ev_01m61365ve7bw6fk7zpk9jav58",
+        "source_type": "infra",
+        "collector": "docker.inspect",
+        "status": "ok",
+        "summary": "docker.inspect OK: container_id=3187daf6ae86714360e8d6494086871e2b6aae1d2976ab6610f4f4d678284638, error=, exit_code=0, finished_at=2026-10-28T11:09:04.199743883Z, oom_killed=False, restart_count=0, ru"
+      },
+      {
+        "id": "ev_01m61368qgn6p3t1dnaq4vppgn",
+        "source_type": "health",
+        "collector": "redis.health",
+        "status": "error",
+        "summary": "redis.health error (REDIS_ERROR): TimeoutError"
+      },
+      {
+        "id": "ev_01m6136acqx2hr2vtd78vhvphe",
+        "source_type": "health",
+        "collector": "http.health_check",
+        "status": "unavailable",
+        "summary": "http.health_check unavailable (HEALTH_URL_NOT_REGISTERED): asset has no registered health_url"
+      },
+      {
+        "id": "ev_01m6136acs2jfcdd5h0cam8mmy",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "unavailable",
+        "summary": "prometheus.query unavailable (METRIC_TEMPLATE_NOT_ALLOWED): metric template 'redis_up' not in instance allowlist"
+      },
+      {
+        "id": "ev_01m6136aczmcp77jxz41wxhjk5",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=0, mode=text-only, note=published runbook versions only; drafts are not executable guidance, runbooks=[]"
+      },
+      {
+        "id": "ev_01m6136ad4fgfqgw1zmymsp088",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: note=no traces matched (service/time range), traces=[]"
+      },
+      {
+        "id": "ev_01m6136bkh34zwbmdqzy4rr5c7",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=3187daf6ae86714360e8d6494086871e2b6aae1d2976ab6610f4f4d678284638, logs=['1:M 27 Oct 2026 13:28:11.347 * RDB memory usage when created 0.90 Mb', '1:M 27 Oct 2026 13:28:11.3"
+      },
+      {
+        "id": "ev_01m6136egnn3deqydpr0behe50",
+        "source_type": "health",
+        "collector": "redis.health",
+        "status": "error",
+        "summary": "redis.health error (REDIS_ERROR): TimeoutError"
+      },
+      {
+        "id": "ev_01m6136fkysxg3q43n80g1r9ce",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "unavailable",
+        "summary": "prometheus.query unavailable (METRIC_TEMPLATE_NOT_ALLOWED): metric template 'redis_connected_clients' not in instance allowlist"
+      },
+      {
+        "id": "ev_01m6136fp1170m9jv12qkkh2bz",
+        "source_type": "health",
+        "collector": "http.health_check",
+        "status": "ok",
+        "summary": "http.health_check OK: body={\"status\":\"UP\",\"components\":{\"diskSpace\":{\"status\":\"UP\",\"details\":{\"total\":1081101176832,\"free\":1004218949632,\"threshold\":10485760,\"path\":\"/app/.\",\"exists\":true}},\"ping\":{\"s"
+      },
+      {
+        "id": "ev_01m6136gtnb0nnbemrrkkt0nq8",
+        "source_type": "infra",
+        "collector": "docker.inspect",
+        "status": "ok",
+        "summary": "docker.inspect OK: container_id=3187daf6ae86714360e8d6494086871e2b6aae1d2976ab6610f4f4d678284638, error=, exit_code=0, finished_at=2026-10-28T11:09:04.199743883Z, oom_killed=False, restart_count=0, ru"
+      }
+    ],
+    "retrieval_events": [
+      {
+        "query": "Redis 连接池 不可达 连接超时",
+        "filters": {
+          "mode": "text-only",
+          "doc_types": [
+            "postmortem",
+            "guide"
+          ],
+          "all_assets": true,
+          "environment": "sandbox",
+          "authorized_asset_count": 0,
+          "embedding_model_version": null
+        },
+        "result_version_ids": [
+          "kbv_01m61051q7zgmj8ex39mvzwqce",
+          "kbv_01m6105zy4yvcqpchn1nv80h2e",
+          "kbv_01m610607yqwxdqh8nxr2g8ack"
+        ],
+        "ranks": {
+          "text": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rank": 2,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rank": 3,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610607yqwxdqh8nxr2g8ack_0",
+              "version_id": "kbv_01m610607yqwxdqh8nxr2g8ack"
+            },
+            {
+              "rank": 4,
+              "score": 0.0,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            },
+            {
+              "rank": 5,
+              "score": 0.0,
+              "chunk_id": "kcc_dbg1_0",
+              "version_id": "kbv_dbg1"
+            }
+          ],
+          "final": [
+            {
+              "rrf": 0.01639344262295082,
+              "rank": 1,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rrf": 0.016129032258064516,
+              "rank": 2,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rrf": 0.015873015873015872,
+              "rank": 3,
+              "chunk_id": "kcc_01m610607yqwxdqh8nxr2g8ack_0",
+              "version_id": "kbv_01m610607yqwxdqh8nxr2g8ack"
+            }
+          ]
+        },
+        "used_by_agent": true,
+        "latency_ms": 27,
+        "created_at": "2026-10-28T11:09:08.822078+00:00"
+      }
+    ],
+    "recorded_at": "2026-10-28T19:09:35+0800"
+  },
+  {
+    "mode": "text-only",
+    "scenario": "M1",
+    "incident_id": "inc_01m6137hhrn3a1mvbqd1a2nq73",
+    "run_id": "run_01m6137hjexyca2p882bnfwhmm",
+    "run_status": "completed",
+    "stop_reason": "completed",
+    "usage": {
+      "tokens_in": 27583,
+      "tokens_out": 3705,
+      "iterations_used": 20,
+      "tool_calls_used": 14
+    },
+    "report": {
+      "id": "rpt_01m61386j9br7x59ngk2tj1z82",
+      "run_id": "run_01m6137hjexyca2p882bnfwhmm",
+      "version_no": 1,
+      "status": "final",
+      "conclusion": {
+        "summary": "sandbox 环境 MySQL（as_demo_mysql）出现连接与慢查询指标异常：Threads_connected=41/Threads_running=42（max_connections=151，未被打满），Connections=2902 伴随 Aborted_connects=2490、Slow_queries=80，慢查询摘要高度集中于 SELECT SLEEP(?) 与 BENCHMARK(MD5())。容器本身 running、无 OOM/重启。该组合更像压测/合成负载（消融实验流量）驱动，而非配置上限耗尽；但因 Prometheus 指标、链路与服务健康端点均不可用，触发流量的来源方无法从实时证据确认。",
+        "key_findings": [
+          {
+            "detail": "Threads_connected=41、Threads_running=42、Connections=2902、Aborted_connects=2490、Slow_queries=80；max_connections=151。41/151 约 27%，与历史复盘描述的『连接数接近上限、新建连接被拒』不一致。",
+            "finding": "MySQL 连接与慢查询计数显著抬升，但连接数尚未触及 max_connections 上限",
+            "evidence_ids": [
+              "ev_01m6137m5jya7sn73j2kdtn2ne"
+            ]
+          },
+          {
+            "detail": "slow_digest 前两位为 SELECT `SLEEP`(?)（200 次、累计 21303.407s、单次约 106.5s）与 SELECT `BENCHMARK`(`MD5`(?))（29 次、累计 31.351s）。这两类语句通常是压测/消融实验工具产物，而非业务查询模式。",
+            "finding": "慢查询由合成/压测型语句主导，符合实验流量特征",
+            "evidence_ids": [
+              "ev_01m6137m5jya7sn73j2kdtn2ne"
+            ]
+          },
+          {
+            "detail": "约 86% 的连接尝试被中止，符合客户端侧超时、连接风暴或反复重连的压测/错误配置行为；但现有只读诊断未包含客户端错误码与来源 IP 分布。",
+            "finding": "Aborted_connects=2490 相对 Connections=2902 比例极高，提示大量连接建立失败/被中断",
+            "evidence_ids": [
+              "ev_01m6137m5jya7sn73j2kdtn2ne"
+            ]
+          },
+          {
+            "detail": "state=running、exit_code=0、oom_killed=False、restart_count=0。",
+            "finding": "MySQL 容器进程健康，无 OOM、无重启，排除容器崩溃类原因",
+            "evidence_ids": [
+              "ev_01m6137m4d3kabx1kch67pw1zy"
+            ]
+          },
+          {
+            "detail": "日志为 2026-10-28 04:13:28~04:13:33 的 Entrypoint 初始化与 InnoDB 启动记录，尾部未见运行期连接拒绝信息；无法据此确认或排除连接拒绝。",
+            "finding": "容器日志仅覆盖初始化阶段，无运行期错误（如 Too many connections）可查",
+            "evidence_ids": [
+              "ev_01m6137m4nfr3wdj2haq817cna",
+              "ev_01m6137s08hc2s5xcnjm4xbpf7"
+            ]
+          },
+          {
+            "detail": "health_url 未登记（HEALTH_URL_NOT_REGISTERED）；up / http_requests_error_rate / http_request_duration_p95 / process_resident_memory 四个 PromQL 模板均返回空序列；otel 链路查询 no traces matched。属采集能力限制，不代表服务无问题或无流量。",
+            "finding": "指标、链路、服务健康端点均不可用，限制了对上游调用方与时间趋势的判定",
+            "evidence_ids": [
+              "ev_01m6137m3qhmffem1wpzgs6fc5",
+              "ev_01m6137pjb9mps40fhjmvq4jta",
+              "ev_01m6137pjy55zzapd4vegq9e8q",
+              "ev_01m6137pjevp1hjzactbr3yxk2",
+              "ev_01m6137pkds5a00bw5t7fb95t8",
+              "ev_01m6137pk2nc74zgwwh5a7t5es"
+            ]
+          },
+          {
+            "detail": "历史复盘（kbv_01m6106006692a5mt6xwm312gc）称此前根因为 max_connections=100 过低；本次实时显示 max_connections=151，连接仅约 27% 占用，且慢查询为 SLEEP/BENCHMARK 合成语句，故该历史根因不适用于本次事件。该证据仅作排查线索，不作根因支撑。",
+            "finding": "历史复盘结论与当前实时证据冲突，按规则以实时证据为准",
+            "evidence_ids": [
+              "ev_01m6137pk14arybhcprh2s5pn9",
+              "ev_01m6137rzfp5rvc5mm7y81z6ff"
+            ]
+          },
+          {
+            "detail": "check_redis_health(as_demo_mysql) 返回 ASSET_TYPE_OUT_OF_MANIFEST_SCOPE，已停止对该资产的重试。",
+            "finding": "Redis 基线为该资产类型授权范围外，未取得",
+            "evidence_ids": []
+          }
+        ],
+        "next_manual_steps": [
+          "人工核对该时间窗是否处于 D4 消融实验压测计划内，确认 SELECT SLEEP / BENCHMARK(MD5) 是否为实验脚本所发（含发起账号与会话主机）。",
+          "如为压测流量，建议实验结束后观察 Threads_connected、Aborted_connects、Slow_queries 是否自然回落，无需变更 max_connections。",
+          "若非实验流量，请进一步核查应用侧连接池上限、重试策略与连接泄漏，并查看客户端错误码分布。",
+          "申请补充 MySQL 实例级监控与 processlist 采样能力（当前 Prometheus 模板覆盖不到 MySQL 指标），以便区分资源瓶颈与流量驱动。",
+          "如需排查缓存/上层依赖，请将相应资产（如 Redis 及应用服务）纳入授权清单后重新取证；本次 check_redis_health 因资产类型超出清单范围被拒绝。"
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "hyp_01m61386hsme9bb6dysd8591xa",
+          "rank": 1,
+          "statement": "连接数激增与慢查询由压测/消融实验的合成负载（SELECT SLEEP、BENCHMARK(MD5) 类脚本）驱动，而非 MySQL 配置上限或实例故障",
+          "status": "supported",
+          "supporting_evidence_ids": [
+            "ev_01m6137m5jya7sn73j2kdtn2ne",
+            "ev_01m6137m4d3kabx1kch67pw1zy"
+          ],
+          "contradicting_evidence_ids": [],
+          "missing_information": [
+            "客户端来源 IP / 应用标识分布，以确认流量是否来自压测工具或实验作业",
+            "SLEEP/BENCHMARK 语句的发起账号与会话用户",
+            "实验排期记录，确认该时间窗是否存在 D4 消融压测计划"
+          ],
+          "confidence": "medium",
+          "created_at": "2026-10-28T11:10:15.112503Z"
+        },
+        {
+          "id": "hyp_01m61386hsme9bb6dysd8591xb",
+          "rank": 2,
+          "statement": "max_connections 配置过低导致新建连接被拒（历史复盘同款根因）",
+          "status": "refuted",
+          "supporting_evidence_ids": [],
+          "contradicting_evidence_ids": [
+            "ev_01m6137m5jya7sn73j2kdtn2ne"
+          ],
+          "missing_information": [],
+          "confidence": "high",
+          "created_at": "2026-10-28T11:10:15.112503Z"
+        },
+        {
+          "id": "hyp_01m61386hsme9bb6dysd8591xc",
+          "rank": 3,
+          "statement": "上游应用连接池配置不当/连接泄漏导致连接风暴与大量 Aborted_connects",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [
+            "ev_01m6137m5jya7sn73j2kdtn2ne"
+          ],
+          "contradicting_evidence_ids": [
+            "ev_01m6137m5jya7sn73j2kdtn2ne"
+          ],
+          "missing_information": [
+            "应用侧连接池配置与重试逻辑",
+            "客户端错误码（如 1040 Too many connections、2003/2013 连接失败）分布",
+            "Aborted_connects 的时间趋势（是否与实验压测窗口重合）"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:10:15.112503Z"
+        },
+        {
+          "id": "hyp_01m61386hsme9bb6dysd8591xd",
+          "rank": 4,
+          "statement": "MySQL 实例资源瓶颈（CPU/IO/内存）导致查询变慢并堆积连接",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [
+            "ev_01m6137m5jya7sn73j2kdtn2ne"
+          ],
+          "contradicting_evidence_ids": [
+            "ev_01m6137m4d3kabx1kch67pw1zy"
+          ],
+          "missing_information": [
+            "MySQL 侧 CPU/IO/内存监控（当前 Prometheus 模板仅覆盖 HTTP 与进程内存，且返回空序列）",
+            "InnoDB 缓冲池与锁等待指标",
+            "SLEEP 会话之外的真实业务慢查询 TOP digest 的完整列表"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:10:15.112503Z"
+        }
+      ],
+      "evidence_refs": [
+        "ev_01m6137m3qhmffem1wpzgs6fc5",
+        "ev_01m6137m4d3kabx1kch67pw1zy",
+        "ev_01m6137m4nfr3wdj2haq817cna",
+        "ev_01m6137m5jya7sn73j2kdtn2ne",
+        "ev_01m6137pjb9mps40fhjmvq4jta",
+        "ev_01m6137pjevp1hjzactbr3yxk2",
+        "ev_01m6137pjy55zzapd4vegq9e8q",
+        "ev_01m6137pk14arybhcprh2s5pn9",
+        "ev_01m6137pk2nc74zgwwh5a7t5es",
+        "ev_01m6137pkaegy9a67c3de3nvya",
+        "ev_01m6137pkds5a00bw5t7fb95t8",
+        "ev_01m6137rzfp5rvc5mm7y81z6ff",
+        "ev_01m6137s08hc2s5xcnjm4xbpf7"
+      ],
+      "unknown_note": {
+        "reason": null,
+        "is_unknown": false,
+        "missing_information": [
+          "客户端来源 IP、账号与会话明细（performance_schema/processlist 的 user/host 维度）",
+          "Aborted_connects 与 Slow_queries 的时间序列趋势，用于与实验压测窗口对齐",
+          "客户端侧错误码分布，确认是否存在 Too many connections 拒绝",
+          "Redis / 上层应用的实时状态（本次资产类型不在授权清单内，需另行授权）",
+          "sandbox 环境 D4 消融实验的压测计划与执行记录"
+        ]
+      },
+      "generator": {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+        "rag_mode": "text-only",
+        "prompt_version": "d2-v1"
+      },
+      "generated_at": "2026-10-28T11:10:15.113754Z",
+      "created_at": "2026-10-28T11:10:15.112503Z"
+    },
+    "evidence": [
+      {
+        "id": "ev_01m6137m3qhmffem1wpzgs6fc5",
+        "source_type": "health",
+        "collector": "http.health_check",
+        "status": "unavailable",
+        "summary": "http.health_check unavailable (HEALTH_URL_NOT_REGISTERED): asset has no registered health_url"
+      },
+      {
+        "id": "ev_01m6137m4d3kabx1kch67pw1zy",
+        "source_type": "infra",
+        "collector": "docker.inspect",
+        "status": "ok",
+        "summary": "docker.inspect OK: container_id=b9cff400626d66a5662a03404d65de72757fa3185a701b41eb08b0517ecc8a4d, error=, exit_code=0, finished_at=0001-01-01T00:00:00Z, oom_killed=False, restart_count=0, running=True"
+      },
+      {
+        "id": "ev_01m6137m4nfr3wdj2haq817cna",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=b9cff400626d66a5662a03404d65de72757fa3185a701b41eb08b0517ecc8a4d, logs=['2026-10-28 04:13:28+00:00 [Note] [Entrypoint]: Entrypoint script for MySQL Server 8.4.13-1.el9 sta"
+      },
+      {
+        "id": "ev_01m6137m5jya7sn73j2kdtn2ne",
+        "source_type": "infra",
+        "collector": "mysql.diagnostics",
+        "status": "ok",
+        "summary": "mysql.diagnostics OK: sections={'status': {'rows': [['Threads_connected', '41'], ['Threads_running', '42'], ['Connections', '2902'], ['Aborted_connects', '2490'], ['Slow_queries', '80']], 'row_count':"
+      },
+      {
+        "id": "ev_01m6137pjb9mps40fhjmvq4jta",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m6137pjevp1hjzactbr3yxk2",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m6137pjy55zzapd4vegq9e8q",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m6137pk14arybhcprh2s5pn9",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=1, hits=[{'version_id': 'kbv_01m6106006692a5mt6xwm312gc', 'document_id': 'kb_01m6106006692a5mt6xwm312gb', 'doc_type': 'postmortem', 'title': '复盘：MySQL 连接数激增（历史：曾因 max_co"
+      },
+      {
+        "id": "ev_01m6137pk2nc74zgwwh5a7t5es",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: note=no traces matched (service/time range), traces=[]"
+      },
+      {
+        "id": "ev_01m6137pkaegy9a67c3de3nvya",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=0, mode=text-only, note=published runbook versions only; drafts are not executable guidance, runbooks=[]"
+      },
+      {
+        "id": "ev_01m6137pkds5a00bw5t7fb95t8",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m6137rzfp5rvc5mm7y81z6ff",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=1, hits=[{'version_id': 'kbv_01m6106006692a5mt6xwm312gc', 'document_id': 'kb_01m6106006692a5mt6xwm312gb', 'doc_type': 'postmortem', 'title': '复盘：MySQL 连接数激增（历史：曾因 max_co"
+      },
+      {
+        "id": "ev_01m6137s08hc2s5xcnjm4xbpf7",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=b9cff400626d66a5662a03404d65de72757fa3185a701b41eb08b0517ecc8a4d, logs=['2026-10-28 04:13:28+00:00 [Note] [Entrypoint]: Entrypoint script for MySQL Server 8.4.13-1.el9 sta"
+      }
+    ],
+    "retrieval_events": [
+      {
+        "query": "MySQL 连接数激增 慢查询 SELECT SLEEP BENCHMARK MD5 连接被打满",
+        "filters": {
+          "mode": "text-only",
+          "doc_types": [
+            "postmortem",
+            "guide"
+          ],
+          "all_assets": true,
+          "environment": "sandbox",
+          "authorized_asset_count": 0,
+          "embedding_model_version": null
+        },
+        "result_version_ids": [
+          "kbv_01m6106006692a5mt6xwm312gc"
+        ],
+        "ranks": {
+          "text": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            }
+          ],
+          "final": [
+            {
+              "rrf": 0.01639344262295082,
+              "rank": 1,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            }
+          ]
+        },
+        "used_by_agent": true,
+        "latency_ms": 8,
+        "created_at": "2026-10-28T11:09:58.745203+00:00"
+      },
+      {
+        "query": "压测 合成负载 SELECT SLEEP 消融实验 RAG sandbox 连接数 实验流量",
+        "filters": {
+          "mode": "text-only",
+          "doc_types": [
+            "postmortem",
+            "guide"
+          ],
+          "all_assets": true,
+          "environment": "sandbox",
+          "authorized_asset_count": 0,
+          "embedding_model_version": null
+        },
+        "result_version_ids": [
+          "kbv_01m6106006692a5mt6xwm312gc"
+        ],
+        "ranks": {
+          "text": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            }
+          ],
+          "final": [
+            {
+              "rrf": 0.01639344262295082,
+              "rank": 1,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            }
+          ]
+        },
+        "used_by_agent": true,
+        "latency_ms": 2,
+        "created_at": "2026-10-28T11:10:01.19137+00:00"
+      }
+    ],
+    "recorded_at": "2026-10-28T19:10:18+0800"
+  },
+  {
+    "mode": "hybrid",
+    "scenario": "S1",
+    "incident_id": "inc_01m6139se6ybxfekdhdtcexznm",
+    "run_id": "run_01m6139sfcp1vqw0fzxbessapr",
+    "run_status": "needs_human",
+    "stop_reason": "unknown_exit",
+    "usage": {
+      "tokens_in": 25321,
+      "tokens_out": 3301,
+      "iterations_used": 16,
+      "tool_calls_used": 10
+    },
+    "report": {
+      "id": "rpt_01m613qvpf9tdqmk73zrfqqf8e",
+      "run_id": "run_01m6139sfcp1vqw0fzxbessapr",
+      "version_no": 1,
+      "status": "final",
+      "conclusion": {
+        "summary": "针对 as_demo_redis 的只读诊断显示：Redis 健康检查（PING/INFO）超时，判定为 Redis 不可达/无响应；容器日志显示进程曾收到 SIGTERM 平滑关闭并于 13:28 重启后 Ready to accept connections tcp，未见 OOM 或崩溃栈。因容器 inspect 不可用、指标模板全部不在白名单、无链路与上游应用侧证据，具体根因（连接池耗尽、重启窗口、网络不可达）无法确认，结论为 unknown 待人工补充。",
+        "key_findings": [
+          {
+            "detail": "check_redis_health 返回 status=error，REDIS_ERROR: TimeoutError，correlation.service=redis/asset=as_demo_redis，属实时故障症状证据。",
+            "finding": "Redis 健康基线探测超时，存在真实的不可达/无响应观测",
+            "evidence_ids": [
+              "ev_01m613qarbe3dmkdgbm9fhh5ng"
+            ]
+          },
+          {
+            "detail": "13:03:41 启动并就绪；13:10:02 收到 SIGTERM『User requested shutdown』、保存 RDB 后退出；13:28:11 重新启动，加载 RDB（keys loaded: 0）后『Ready to accept connections tcp』；仅有一条 no config file specified 的默认配置警告。两次读取结果一致，第二段日志尾部截断于 signal-handler 行。",
+            "finding": "Redis 容器日志显示进程经历 SIGTERM 平滑关闭后重启，且启动无配置错误、无 OOM/崩溃",
+            "evidence_ids": [
+              "ev_01m613qc8dvt3g2v01tvz99n35",
+              "ev_01m613qep5zwnsdmpc0s3beed9"
+            ]
+          },
+          {
+            "detail": "get_container_status 返回 unavailable（CONTAINER_NOT_FOUND: container 'opspilot-demo-redis' not found），属采集侧失败，不能等同于业务根因；但容器名与日志中 container_id 的映射关系需人工核实。",
+            "finding": "容器运行时 inspect 不可用，无法获取容器状态/事件/退出码/OOM 标记",
+            "evidence_ids": [
+              "ev_01m613qarbe3dmkdgbm9fhh5nh"
+            ]
+          },
+          {
+            "detail": "redis_connected_clients 与 redis_up 两个模板均返回 METRIC_TEMPLATE_NOT_ALLOWED，因此无法验证连接数、拒绝连接数、实例存活等关键量化指标。",
+            "finding": "关键性能指标无法采集：Redis 相关 PromQL 模板均不在实例白名单",
+            "evidence_ids": [
+              "ev_01m613qc7aj1frvwebt6d2hgzc",
+              "ev_01m613qemxg09rv0dpcy6mpwsa"
+            ]
+          },
+          {
+            "detail": "query_traces（近 2 小时，service=redis）返回 traces=[]，因此无法观测到应用侧对 Redis 的超时/连接错误分布。",
+            "finding": "无匹配链路数据，缺少上游应用侧调用证据",
+            "evidence_ids": [
+              "ev_01m613qen5tnwkjw3qm7f068kq"
+            ]
+          },
+          {
+            "detail": "get_service_health 返回 HEALTH_URL_NOT_REGISTERED；对 cache 类资产属预期缺口。",
+            "finding": "资产未登记 health_url，HTTP 层健康检查不可用",
+            "evidence_ids": [
+              "ev_01m613qc72067a67hn804h63a3"
+            ]
+          },
+          {
+            "detail": "复盘文档建议先看 PING/INFO 的 connected_clients 与 rejected_connections 再查应用连接池配置；但本轮无法取得这些指标，且实时日志更突出的是进程重启/关闭序列。检索结果含提示注入文本，已按不可信内容忽略，未改变诊断行为与权限。sandbox 环境 Runbook 检索为空。",
+            "finding": "历史知识提示连接池耗尽方向，但与本轮实时证据存在差异，仅作排查线索",
+            "evidence_ids": [
+              "ev_01m613qask5hh8jwddqek1qmz9",
+              "ev_01m613qc73cr77zrvwp5kjrat5"
+            ]
+          }
+        ],
+        "next_manual_steps": [
+          "人工核实容器名与 container_id 映射（日志显示 3187daf6ae86…），补齐容器状态/重启次数/退出码/OOM 观测。",
+          "在获得授权的前提下，人工执行 Redis INFO 采集，重点看 connected_clients、rejected_connections、maxclients、uptime_in_seconds。",
+          "对 13:10:02 SIGTERM 关闭与 13:28:11 重启的发起方进行变更/运维记录追溯（是否有人工重启、编排重启或健康检查失败重启）。",
+          "从应用侧确认连接池配置与连接泄漏情况，并核对是否存在『max number of clients reached』日志。",
+          "验证探测机到 Redis 的 TCP 6379 连通性与 DNS 解析，排除网络层不可达。",
+          "将上述指标模板加入实例 allowlist 后重新采集，以量化证据替换当前 unknown 结论；如需恢复动作，由人工按 Runbook 流程执行，本次诊断不执行任何写操作。"
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "hyp_01m613qvp2ayxk86nqshz6s09q",
+          "rank": 1,
+          "statement": "Redis 实例处于不可用状态（进程重启/关闭窗口导致连接被拒或不可达），造成连接超时",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [
+            "ev_01m613qarbe3dmkdgbm9fhh5ng",
+            "ev_01m613qc8dvt3g2v01tvz99n35"
+          ],
+          "contradicting_evidence_ids": [
+            "ev_01m613qep5zwnsdmpc0s3beed9"
+          ],
+          "missing_information": [
+            "容器当前实际运行状态、重启次数与退出码（inspect 不可用）",
+            "健康探测超时发生时刻相对于 13:28:11 重启完成时间的时间线对齐",
+            "13:28 之后是否存在第三次 SIGTERM/关闭（日志尾部被截断）",
+            "从探测侧到 Redis 的 6379 端口 TCP 可达性（网络/安全组）"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:18:48.269920Z"
+        },
+        {
+          "id": "hyp_01m613qvp2ayxk86nqshz6s09r",
+          "rank": 2,
+          "statement": "Redis 连接池耗尽 / maxclients 打满导致新连接被拒（历史复盘给出的同类根因）",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [
+            "ev_01m613qask5hh8jwddqek1qmz9",
+            "ev_01m613qarbe3dmkdgbm9fhh5ng"
+          ],
+          "contradicting_evidence_ids": [],
+          "missing_information": [
+            "Redis INFO 的 connected_clients、rejected_connections、maxclients 实测值（指标模板被白名单拒绝）",
+            "上游应用侧连接池配置与连接泄漏证据",
+            "日志中是否存在 'max number of clients reached' 类记录的完整文本"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:18:48.269920Z"
+        },
+        {
+          "id": "hyp_01m613qvp2ayxk86nqshz6s09s",
+          "rank": 3,
+          "statement": "实例本身健康，故障位于探测/网络链路（客户端到 Redis 的网络不可达或 DNS/端口问题）",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [
+            "ev_01m613qarbe3dmkdgbm9fhh5ng",
+            "ev_01m613qep5zwnsdmpc0s3beed9"
+          ],
+          "contradicting_evidence_ids": [],
+          "missing_information": [
+            "探测机到 Redis 的网络路径与端口连通性测试结果",
+            "Redis 实例 IP/端口与资产登记信息是否一致的核对结果",
+            "容器运行态与日志 container_id 的映射校验"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:18:48.269920Z"
+        }
+      ],
+      "evidence_refs": [
+        "ev_01m613qarbe3dmkdgbm9fhh5ng",
+        "ev_01m613qarbe3dmkdgbm9fhh5nh",
+        "ev_01m613qask5hh8jwddqek1qmz9",
+        "ev_01m613qc72067a67hn804h63a3",
+        "ev_01m613qc73cr77zrvwp5kjrat5",
+        "ev_01m613qc7aj1frvwebt6d2hgzc",
+        "ev_01m613qc8dvt3g2v01tvz99n35",
+        "ev_01m613qemxg09rv0dpcy6mpwsa",
+        "ev_01m613qen5tnwkjw3qm7f068kq",
+        "ev_01m613qep5zwnsdmpc0s3beed9"
+      ],
+      "unknown_note": {
+        "reason": "仅获得了『Redis 健康探测超时』这一实时症状证据与容器日志中的重启序列；容器 inspect 不可用、全部 Redis 指标模板被白名单拒绝、无链路与上游应用侧数据，关键量化指标（connected_clients/rejected_connections/maxclients）与网络可达性均缺失，无法区分重启窗口、连接池打满与网络不可达三类根因。",
+        "is_unknown": true,
+        "missing_information": [
+          "容器运行时状态、重启次数、退出码与 OOM 标记（修复 inspect 的容器名映射后重采）",
+          "Redis INFO：connected_clients、rejected_connections、maxclients、uptime_in_seconds",
+          "健康探测超时与 13:28:11 重启完成时间的精确时间对齐",
+          "上游应用（demo-app 类）连接池配置、连接泄漏与错误日志",
+          "探测侧到 Redis 6379 端口的连通性与 DNS 解析结果",
+          "完整容器日志（含尾部被截断的 signal-handler 段落）"
+        ]
+      },
+      "generator": {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+        "rag_mode": "hybrid",
+        "prompt_version": "d2-v1"
+      },
+      "generated_at": "2026-10-28T11:18:48.271896Z",
+      "created_at": "2026-10-28T11:18:48.269920Z"
+    },
+    "evidence": [
+      {
+        "id": "ev_01m613qarbe3dmkdgbm9fhh5ng",
+        "source_type": "health",
+        "collector": "redis.health",
+        "status": "error",
+        "summary": "redis.health error (REDIS_ERROR): TimeoutError"
+      },
+      {
+        "id": "ev_01m613qarbe3dmkdgbm9fhh5nh",
+        "source_type": "infra",
+        "collector": "docker.inspect",
+        "status": "unavailable",
+        "summary": "docker.inspect unavailable (CONTAINER_NOT_FOUND): container 'opspilot-demo-redis' not found"
+      },
+      {
+        "id": "ev_01m613qask5hh8jwddqek1qmz9",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=3, hits=[{'version_id': 'kbv_01m61051q7zgmj8ex39mvzwqce', 'document_id': 'kb_01m61051q7zgmj8ex39mvzwqcd', 'doc_type': 'postmortem', 'title': '复盘：Redis 连接池耗尽导致业务超时（S1 类）'"
+      },
+      {
+        "id": "ev_01m613qc72067a67hn804h63a3",
+        "source_type": "health",
+        "collector": "http.health_check",
+        "status": "unavailable",
+        "summary": "http.health_check unavailable (HEALTH_URL_NOT_REGISTERED): asset has no registered health_url"
+      },
+      {
+        "id": "ev_01m613qc73cr77zrvwp5kjrat5",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=0, mode=text-only, note=published runbook versions only; drafts are not executable guidance, runbooks=[]"
+      },
+      {
+        "id": "ev_01m613qc7aj1frvwebt6d2hgzc",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "unavailable",
+        "summary": "prometheus.query unavailable (METRIC_TEMPLATE_NOT_ALLOWED): metric template 'redis_connected_clients' not in instance allowlist"
+      },
+      {
+        "id": "ev_01m613qc8dvt3g2v01tvz99n35",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=3187daf6ae86714360e8d6494086871e2b6aae1d2976ab6610f4f4d678284638, logs=['1:C 27 Oct 2026 13:03:41.186 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo', '1:C 27 Oct 2026 13"
+      },
+      {
+        "id": "ev_01m613qemxg09rv0dpcy6mpwsa",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "unavailable",
+        "summary": "prometheus.query unavailable (METRIC_TEMPLATE_NOT_ALLOWED): metric template 'redis_up' not in instance allowlist"
+      },
+      {
+        "id": "ev_01m613qen5tnwkjw3qm7f068kq",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: note=no traces matched (service/time range), traces=[]"
+      },
+      {
+        "id": "ev_01m613qep5zwnsdmpc0s3beed9",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=3187daf6ae86714360e8d6494086871e2b6aae1d2976ab6610f4f4d678284638, logs=['1:C 27 Oct 2026 13:03:41.186 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo', '1:C 27 Oct 2026 13"
+      }
+    ],
+    "retrieval_events": [
+      {
+        "query": "Redis 连接不可达 连接池耗尽 排查",
+        "filters": {
+          "mode": "hybrid",
+          "doc_types": [
+            "postmortem",
+            "guide"
+          ],
+          "all_assets": true,
+          "environment": "sandbox",
+          "authorized_asset_count": 0,
+          "embedding_model_version": "e5-small-384-v1"
+        },
+        "result_version_ids": [
+          "kbv_01m61051q7zgmj8ex39mvzwqce",
+          "kbv_acc_e5",
+          "kbv_01m610607yqwxdqh8nxr2g8ack"
+        ],
+        "ranks": {
+          "text": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rank": 2,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zwfrtfcb94rgk5xpkt4_0",
+              "version_id": "kbv_01m6105zwfrtfcb94rgk5xpkt4"
+            },
+            {
+              "rank": 3,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610607yqwxdqh8nxr2g8ack_0",
+              "version_id": "kbv_01m610607yqwxdqh8nxr2g8ack"
+            },
+            {
+              "rank": 4,
+              "score": 0.0,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            }
+          ],
+          "final": [
+            {
+              "rrf": 0.03252247488101534,
+              "rank": 1,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rrf": 0.032018442622950824,
+              "rank": 2,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            },
+            {
+              "rrf": 0.03149801587301587,
+              "rank": 3,
+              "chunk_id": "kcc_01m610607yqwxdqh8nxr2g8ack_0",
+              "version_id": "kbv_01m610607yqwxdqh8nxr2g8ack"
+            }
+          ],
+          "vector": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            },
+            {
+              "rank": 2,
+              "score": 0.0,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rank": 3,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            },
+            {
+              "rank": 4,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610607yqwxdqh8nxr2g8ack_0",
+              "version_id": "kbv_01m610607yqwxdqh8nxr2g8ack"
+            },
+            {
+              "rank": 5,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610604dq9am3xb6zdn7f2yk_0",
+              "version_id": "kbv_01m610604dq9am3xb6zdn7f2yk"
+            },
+            {
+              "rank": 6,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zwfrtfcb94rgk5xpkt4_0",
+              "version_id": "kbv_01m6105zwfrtfcb94rgk5xpkt4"
+            },
+            {
+              "rank": 7,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rank": 8,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106065hg18cfghkjcayhdf_0",
+              "version_id": "kbv_01m6106065hg18cfghkjcayhdf"
+            }
+          ]
+        },
+        "used_by_agent": true,
+        "latency_ms": 439874,
+        "created_at": "2026-10-28T11:18:30.959663+00:00"
+      }
+    ],
+    "recorded_at": "2026-10-28T19:18:48+0800"
+  },
+  {
+    "mode": "hybrid",
+    "scenario": "M1",
+    "incident_id": "inc_01m613rfqcqqf8qsa9mhpvwb90",
+    "run_id": "run_01m613rfr0ns0fm29d8rqn6wye",
+    "run_status": "completed",
+    "stop_reason": "completed",
+    "usage": {
+      "tokens_in": 26992,
+      "tokens_out": 3301,
+      "iterations_used": 17,
+      "tool_calls_used": 11
+    },
+    "report": {
+      "id": "rpt_01m613s4dnz9gm2eq96c4xj19v",
+      "run_id": "run_01m613rfr0ns0fm29d8rqn6wye",
+      "version_no": 1,
+      "status": "final",
+      "conclusion": {
+        "summary": "sandbox 环境 MySQL（as_demo_mysql）实例容器运行正常（running=true、restart_count=0、oom_killed=false），实时诊断显示 Threads_connected=41 远低于 max_connections=151，连接使用率约 27%，未出现连接耗尽；累积 Slow_queries=80 主要由 SELECT SLEEP(?)（240 次、总耗时 22588s）与 SELECT BENCHMARK(MD5)（35 次）构成，呈压测/人为注入负载特征。历史复盘提示的 max_connections 过低根因与本 Run 实时证据冲突，以实时证据为准。",
+        "key_findings": [
+          {
+            "detail": "docker.inspect: running=true, state=running, restart_count=0, oom_killed=false, exit_code=0, started_at=2026-10-28T04:13:27Z；容器日志仅见 MySQL 8.4.13 初始化与启动记录，未见连接拒绝或崩溃告警（日志为近期截断样本）。",
+            "finding": "MySQL 实例进程存活且容器无异常退出/OOM/重启",
+            "evidence_ids": [
+              "ev_01m613rkkxyh316fttvf9mpx5b",
+              "ev_01m613rngmbzbe18rxvv69mtzs"
+            ]
+          },
+          {
+            "detail": "Threads_connected=41、Threads_running=42、max_connections=151，使用率约 27%；Connections=3048 为累计新建连接数（自启动以来的计数，非并发值）；Aborted_connects=2545 偏高但与连接容量上限无直接耗尽关系。",
+            "finding": "连接数未接近 max_connections，不存在连接耗尽",
+            "evidence_ids": [
+              "ev_01m613rkk9wnzd1r412418rwqp"
+            ]
+          },
+          {
+            "detail": "slow_digest 首位 SELECT `SLEEP`(?) 执行 240 次、总耗时 22588.475s；第二位 SELECT `BENCHMARK`(?,`MD5`(?)) 35 次、总耗时 37.733s；其余为 performance_schema 自查询与版本查询等轻量语句。Slow_queries=80 与 SLEEP/BENCHMARK 模式一致，符合压测/消融实验注入负载特征。",
+            "finding": "慢查询由压测型语句（SLEEP/BENCHMARK）主导，而非业务慢 SQL",
+            "evidence_ids": [
+              "ev_01m613rkk9wnzd1r412418rwqp"
+            ]
+          },
+          {
+            "detail": "up、process_resident_memory、http_requests_error_rate、http_request_duration_p95 四个模板查询均返回 result_type=vector 但 series=[]（空序列），即该资产在 Prometheus 无对应时间序列；这属于数据缺失，不能替代为成功观测，也不能据此推断任何结论。",
+            "finding": "Prometheus 指标侧无可用序列，无法为容量/错误率结论提供支撑",
+            "evidence_ids": [
+              "ev_01m613rkjvj0pg0e52gyettrh8",
+              "ev_01m613rng6j6hhkk32d0tzepmy",
+              "ev_01m613rnfwr5x41qy7vzq0y3gn",
+              "ev_01m613rngfmf5g3v9ngamdgs94"
+            ]
+          },
+          {
+            "detail": "otel.query 返回 traces=[]（no traces matched）；get_service_health 返回 unavailable / HEALTH_URL_NOT_REGISTERED，该资产未登记 health_url，属采集不可用，不等同于业务故障。",
+            "finding": "无链路数据、无健康检查端点，应用侧影响面无法从本 Run 确认",
+            "evidence_ids": [
+              "ev_01m613rs5mgrq74kmebr9advdn",
+              "ev_01m613rs5js658s367jxkcx6gf"
+            ]
+          },
+          {
+            "detail": "历史复盘《复盘：MySQL 连接数激增（曾因 max_connections 过低）》称当时 Threads_connected 接近 max_connections 且新建连接被拒、max_connections=100 过低；本 Run 实测 max_connections=151 且使用率仅 27%，与该经验冲突，故不采纳其为当前根因（该条为历史知识线索，不构成实时证据）。",
+            "finding": "历史经验与实时证据冲突，以实时证据为准",
+            "evidence_ids": [
+              "ev_01m613rkk6p0wktbt6qfyakktk"
+            ]
+          }
+        ],
+        "next_manual_steps": [
+          "人工核对本次 D4 消融实验的压测脚本与执行时间窗，确认 SELECT SLEEP / SELECT BENCHMARK(MD5) 属预期注入负载，并以其为基线判定现象是否为预期行为",
+          "由人工补充授权应用服务资产后，采集其连接池 active/idle、maxclients 与接口错误率/延迟，评估是否对业务造成真实影响",
+          "核查 MySQL 侧 Aborted_connects=2545 的连接来源（账号/客户端 IP），区分失败握手与压测高频建连",
+          "如后续需容量趋势判断，请补齐 MySQL 实例的 Prometheus 指标采集（当前 up/内存/错误率/延迟模板均无序列）",
+          "为 as_demo_mysql 登记 health_url 以便后续常规健康探测（本次返回 HEALTH_URL_NOT_REGISTERED）"
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "hyp_01m613s4d8vxmnf7bdx67zjxtw",
+          "rank": 1,
+          "statement": "当前“连接数激增与慢查询”现象由压测/消融实验注入的负载（SELECT SLEEP、SELECT BENCHMARK(MD5) 等）驱动，MySQL 实例本身容量充足、无连接耗尽",
+          "status": "supported",
+          "supporting_evidence_ids": [
+            "ev_01m613rkk9wnzd1r412418rwqp",
+            "ev_01m613rkkxyh316fttvf9mpx5b",
+            "ev_01m613rngmbzbe18rxvv69mtzs"
+          ],
+          "contradicting_evidence_ids": [],
+          "missing_information": [],
+          "confidence": "medium",
+          "created_at": "2026-10-28T11:19:29.971985Z"
+        },
+        {
+          "id": "hyp_01m613s4d8vxmnf7bdx67zjxtx",
+          "rank": 2,
+          "statement": "max_connections 配置过低导致连接被拒（历史复盘假设）",
+          "status": "refuted",
+          "supporting_evidence_ids": [
+            "ev_01m613rkk6p0wktbt6qfyakktk"
+          ],
+          "contradicting_evidence_ids": [
+            "ev_01m613rkk9wnzd1r412418rwqp"
+          ],
+          "missing_information": [],
+          "confidence": "medium",
+          "created_at": "2026-10-28T11:19:29.971985Z"
+        },
+        {
+          "id": "hyp_01m613s4d8vxmnf7bdx67zjxty",
+          "rank": 3,
+          "statement": "业务应用侧存在异常（如连接池耗尽/接口错误率上升）并向 MySQL 扩散",
+          "status": "insufficient_data",
+          "supporting_evidence_ids": [],
+          "contradicting_evidence_ids": [
+            "ev_01m613rs5mgrq74kmebr9advdn"
+          ],
+          "missing_information": [
+            "应用服务（demo-app）侧的连接池配置与实时连接占用（maxclients/pool size、active/idle 数）",
+            "应用侧错误率与延迟的可用指标（当前 MySQL 资产下 http_* 与 up 模板均为空序列，需确认正确服务标签或改查应用资产）",
+            "MySQL 侧 Aborted_connects=2545 的来源明细（连接来源 IP/账号、是否与压测客户端对应）",
+            "慢查询 SLEEP/BENCHMARK 的发起客户端与压测脚本执行记录，以确认注入负载范围"
+          ],
+          "confidence": "low",
+          "created_at": "2026-10-28T11:19:29.971985Z"
+        }
+      ],
+      "evidence_refs": [
+        "ev_01m613rkjvj0pg0e52gyettrh8",
+        "ev_01m613rkk6p0wktbt6qfyakktk",
+        "ev_01m613rkk9wnzd1r412418rwqp",
+        "ev_01m613rkkxyh316fttvf9mpx5b",
+        "ev_01m613rnfwr5x41qy7vzq0y3gn",
+        "ev_01m613rng6j6hhkk32d0tzepmy",
+        "ev_01m613rngbzgte4nr3v2dzcgwn",
+        "ev_01m613rngfmf5g3v9ngamdgs94",
+        "ev_01m613rngmbzbe18rxvv69mtzs",
+        "ev_01m613rs5js658s367jxkcx6gf",
+        "ev_01m613rs5mgrq74kmebr9advdn"
+      ],
+      "unknown_note": {
+        "reason": null,
+        "is_unknown": false,
+        "missing_information": [
+          "应用侧连接池与错误率/延迟指标（需确认服务标签或授权应用资产）",
+          "Aborted_connects 来源与压测客户端身份对照",
+          "更长时间窗的 MySQL 指标序列（当前 Prometheus 无该资产序列）"
+        ]
+      },
+      "generator": {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+        "rag_mode": "hybrid",
+        "prompt_version": "d2-v1"
+      },
+      "generated_at": "2026-10-28T11:19:29.973538Z",
+      "created_at": "2026-10-28T11:19:29.971985Z"
+    },
+    "evidence": [
+      {
+        "id": "ev_01m613rkjvj0pg0e52gyettrh8",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m613rkk6p0wktbt6qfyakktk",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=3, hits=[{'version_id': 'kbv_01m61051q7zgmj8ex39mvzwqce', 'document_id': 'kb_01m61051q7zgmj8ex39mvzwqcd', 'doc_type': 'postmortem', 'title': '复盘：Redis 连接池耗尽导致业务超时（S1 类）'"
+      },
+      {
+        "id": "ev_01m613rkk9wnzd1r412418rwqp",
+        "source_type": "infra",
+        "collector": "mysql.diagnostics",
+        "status": "ok",
+        "summary": "mysql.diagnostics OK: sections={'status': {'rows': [['Threads_connected', '41'], ['Threads_running', '42'], ['Connections', '3048'], ['Aborted_connects', '2545'], ['Slow_queries', '80']], 'row_count':"
+      },
+      {
+        "id": "ev_01m613rkkxyh316fttvf9mpx5b",
+        "source_type": "infra",
+        "collector": "docker.inspect",
+        "status": "ok",
+        "summary": "docker.inspect OK: container_id=b9cff400626d66a5662a03404d65de72757fa3185a701b41eb08b0517ecc8a4d, error=, exit_code=0, finished_at=0001-01-01T00:00:00Z, oom_killed=False, restart_count=0, running=True"
+      },
+      {
+        "id": "ev_01m613rnfwr5x41qy7vzq0y3gn",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m613rng6j6hhkk32d0tzepmy",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m613rngbzgte4nr3v2dzcgwn",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=0, mode=text-only, note=published runbook versions only; drafts are not executable guidance, runbooks=[]"
+      },
+      {
+        "id": "ev_01m613rngfmf5g3v9ngamdgs94",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m613rngmbzbe18rxvv69mtzs",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=b9cff400626d66a5662a03404d65de72757fa3185a701b41eb08b0517ecc8a4d, logs=['2026-10-28 04:13:28+00:00 [Note] [Entrypoint]: Entrypoint script for MySQL Server 8.4.13-1.el9 sta"
+      },
+      {
+        "id": "ev_01m613rs5js658s367jxkcx6gf",
+        "source_type": "health",
+        "collector": "http.health_check",
+        "status": "unavailable",
+        "summary": "http.health_check unavailable (HEALTH_URL_NOT_REGISTERED): asset has no registered health_url"
+      },
+      {
+        "id": "ev_01m613rs5mgrq74kmebr9advdn",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: note=no traces matched (service/time range), traces=[]"
+      }
+    ],
+    "retrieval_events": [
+      {
+        "query": "MySQL 连接数激增 慢查询 连接池耗尽",
+        "filters": {
+          "mode": "hybrid",
+          "doc_types": [
+            "postmortem",
+            "guide"
+          ],
+          "all_assets": true,
+          "environment": "sandbox",
+          "authorized_asset_count": 0,
+          "embedding_model_version": "e5-small-384-v1"
+        },
+        "result_version_ids": [
+          "kbv_01m61051q7zgmj8ex39mvzwqce",
+          "kbv_acc_e5",
+          "kbv_01m6106006692a5mt6xwm312gc"
+        ],
+        "ranks": {
+          "text": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rank": 2,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            },
+            {
+              "rank": 3,
+              "score": 0.0,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            }
+          ],
+          "final": [
+            {
+              "rrf": 0.032266458495966696,
+              "rank": 1,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rrf": 0.032266458495966696,
+              "rank": 2,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            },
+            {
+              "rrf": 0.03225806451612903,
+              "rank": 3,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            }
+          ],
+          "vector": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            },
+            {
+              "rank": 2,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            },
+            {
+              "rank": 3,
+              "score": 0.0,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rank": 4,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rank": 5,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610607yqwxdqh8nxr2g8ack_0",
+              "version_id": "kbv_01m610607yqwxdqh8nxr2g8ack"
+            },
+            {
+              "rank": 6,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610604dq9am3xb6zdn7f2yk_0",
+              "version_id": "kbv_01m610604dq9am3xb6zdn7f2yk"
+            },
+            {
+              "rank": 7,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zwfrtfcb94rgk5xpkt4_0",
+              "version_id": "kbv_01m6105zwfrtfcb94rgk5xpkt4"
+            },
+            {
+              "rank": 8,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106065hg18cfghkjcayhdf_0",
+              "version_id": "kbv_01m6106065hg18cfghkjcayhdf"
+            }
+          ]
+        },
+        "used_by_agent": true,
+        "latency_ms": 61,
+        "created_at": "2026-10-28T11:19:12.738809+00:00"
+      }
+    ],
+    "recorded_at": "2026-10-28T19:19:34+0800"
+  },
+  {
+    "mode": "hybrid",
+    "scenario": "J2",
+    "incident_id": "inc_01m613sqsrw7kx9fjns7wmk1aj",
+    "run_id": "run_01m613sqtc14gsqz1z073vpkvj",
+    "run_status": "needs_human",
+    "stop_reason": "unknown_exit",
+    "usage": {
+      "tokens_in": 31942,
+      "tokens_out": 3702,
+      "iterations_used": 20,
+      "tool_calls_used": 13
+    },
+    "report": {
+      "id": "rpt_01m613tcsf2xdwdzrd9mhc31fj",
+      "run_id": "run_01m613sqtc14gsqz1z073vpkvj",
+      "version_no": 1,
+      "status": "final",
+      "conclusion": {
+        "summary": "模型未产出可解析的结构化报告。",
+        "key_findings": [],
+        "next_manual_steps": [
+          "人工复查事件与资产状态"
+        ]
+      },
+      "hypotheses": [],
+      "evidence_refs": [
+        "ev_01m613ssepfmyw76e92xjz3xxm",
+        "ev_01m613ssfgg2bfzrznww94dj6n",
+        "ev_01m613stq64s39m4725kpa1k5z",
+        "ev_01m613stqfhbgv7cfn6rw09zc0",
+        "ev_01m613stqqtzqjxnaga8r0mxvd",
+        "ev_01m613swdgm9eegrbb1xsr3vbr",
+        "ev_01m613swdtezhkvgk4q7wyrej0",
+        "ev_01m613swepw12vx7fref3288vn",
+        "ev_01m613swg89gk6twgy0r6mvd19",
+        "ev_01m613symr8vq0tb5rpj944by4",
+        "ev_01m613syn032kj15mda6a49tmn",
+        "ev_01m613syn3nhrqmy0x1xhzqpj7",
+        "ev_01m613syn4sk8h10nrmh766kmz"
+      ],
+      "unknown_note": {
+        "reason": "模型最终输出无法解析为诊断报告 JSON",
+        "is_unknown": true,
+        "missing_information": [
+          "重新发起诊断或人工排查"
+        ]
+      },
+      "generator": {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+        "rag_mode": "hybrid",
+        "prompt_version": "d2-v1"
+      },
+      "generated_at": "2026-10-28T11:20:11.311944Z",
+      "created_at": "2026-10-28T11:20:11.310687Z"
+    },
+    "evidence": [
+      {
+        "id": "ev_01m613ssepfmyw76e92xjz3xxm",
+        "source_type": "health",
+        "collector": "http.health_check",
+        "status": "ok",
+        "summary": "http.health_check OK: body={\"status\":\"UP\",\"components\":{\"diskSpace\":{\"status\":\"UP\",\"details\":{\"total\":1081101176832,\"free\":1003722706944,\"threshold\":10485760,\"path\":\"/app/.\",\"exists\":true}},\"ping\":{\"s"
+      },
+      {
+        "id": "ev_01m613ssfgg2bfzrznww94dj6n",
+        "source_type": "infra",
+        "collector": "docker.inspect",
+        "status": "ok",
+        "summary": "docker.inspect OK: container_id=8dfe5d436ab688d250fb61ab1703b13ca176aa893ecaf88b6efe4441a4ac3b77, error=, exit_code=0, finished_at=0001-01-01T00:00:00Z, oom_killed=False, restart_count=0, running=True"
+      },
+      {
+        "id": "ev_01m613stq64s39m4725kpa1k5z",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[{'metric': {}, 'value': [1793186392.8, '0.14285714285714285']}], series_truncated=False"
+      },
+      {
+        "id": "ev_01m613stqfhbgv7cfn6rw09zc0",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m613stqqtzqjxnaga8r0mxvd",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=8dfe5d436ab688d250fb61ab1703b13ca176aa893ecaf88b6efe4441a4ac3b77, logs=['\\tat org.springframework.web.filter.OncePerRequestFilter.doFilter(OncePerRequestFilter.java:116) ~"
+      },
+      {
+        "id": "ev_01m613swdgm9eegrbb1xsr3vbr",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[{'metric': {'__name__': 'up', 'instance': 'demo-java:8080', 'job': 'java-app'}, 'value': [1793186394.538, '1']}], series_truncated=False"
+      },
+      {
+        "id": "ev_01m613swdtezhkvgk4q7wyrej0",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "ok",
+        "summary": "prometheus.query OK: result_type=vector, series=[], series_truncated=False"
+      },
+      {
+        "id": "ev_01m613swepw12vx7fref3288vn",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=8dfe5d436ab688d250fb61ab1703b13ca176aa893ecaf88b6efe4441a4ac3b77, logs=['\\tat org.springframework.web.filter.OncePerRequestFilter.doFilter(OncePerRequestFilter.java:116) ~"
+      },
+      {
+        "id": "ev_01m613swg89gk6twgy0r6mvd19",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: traces=[{'trace_id': 'e01c061f962a200ea415b8ee4825e6da', 'root_operation': 'http get /api/orders/{id}', 'span_count': 1, 'duration_us': 534, 'services': ['java-app'], 'error_spans': 1},"
+      },
+      {
+        "id": "ev_01m613symr8vq0tb5rpj944by4",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=0, mode=text-only, note=published runbook versions only; drafts are not executable guidance, runbooks=[]"
+      },
+      {
+        "id": "ev_01m613syn032kj15mda6a49tmn",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: traces=[{'trace_id': 'd2a5bfdc06a997e1bb4ffe09eb066872', 'root_operation': 'http get /api/orders/{id}', 'span_count': 1, 'duration_us': 489, 'services': ['java-app'], 'error_spans': 1}]"
+      },
+      {
+        "id": "ev_01m613syn3nhrqmy0x1xhzqpj7",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: traces=[{'trace_id': 'e01c061f962a200ea415b8ee4825e6da', 'root_operation': 'http get /api/orders/{id}', 'span_count': 1, 'duration_us': 534, 'services': ['java-app'], 'error_spans': 1}]"
+      },
+      {
+        "id": "ev_01m613syn4sk8h10nrmh766kmz",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=3, hits=[{'version_id': 'kbv_01m6105zy4yvcqpchn1nv80h2e', 'document_id': 'kb_01m6105zy4yvcqpchn1nv80h2d', 'doc_type': 'postmortem', 'title': '复盘：Java 服务 5xx（历史：曾因网关上游故障）"
+      }
+    ],
+    "retrieval_events": [
+      {
+        "query": "Java 服务 5xx 错误率 异常 消融 /api/orders",
+        "filters": {
+          "mode": "hybrid",
+          "doc_types": [
+            "postmortem",
+            "guide"
+          ],
+          "all_assets": true,
+          "environment": "sandbox",
+          "authorized_asset_count": 0,
+          "embedding_model_version": "e5-small-384-v1"
+        },
+        "result_version_ids": [
+          "kbv_01m6105zy4yvcqpchn1nv80h2e",
+          "kbv_dbg1",
+          "kbv_01m61051q7zgmj8ex39mvzwqce"
+        ],
+        "ranks": {
+          "text": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rank": 2,
+              "score": 0.0,
+              "chunk_id": "kcc_dbg1_0",
+              "version_id": "kbv_dbg1"
+            }
+          ],
+          "final": [
+            {
+              "rrf": 0.03278688524590164,
+              "rank": 1,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rrf": 0.016129032258064516,
+              "rank": 2,
+              "chunk_id": "kcc_dbg1_0",
+              "version_id": "kbv_dbg1"
+            },
+            {
+              "rrf": 0.016129032258064516,
+              "rank": 3,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            }
+          ],
+          "vector": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rank": 2,
+              "score": 0.0,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rank": 3,
+              "score": 0.0,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            },
+            {
+              "rank": 4,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610604dq9am3xb6zdn7f2yk_0",
+              "version_id": "kbv_01m610604dq9am3xb6zdn7f2yk"
+            },
+            {
+              "rank": 5,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zwfrtfcb94rgk5xpkt4_0",
+              "version_id": "kbv_01m6105zwfrtfcb94rgk5xpkt4"
+            },
+            {
+              "rank": 6,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            },
+            {
+              "rank": 7,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610607yqwxdqh8nxr2g8ack_0",
+              "version_id": "kbv_01m610607yqwxdqh8nxr2g8ack"
+            },
+            {
+              "rank": 8,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106065hg18cfghkjcayhdf_0",
+              "version_id": "kbv_01m6106065hg18cfghkjcayhdf"
+            }
+          ]
+        },
+        "used_by_agent": true,
+        "latency_ms": 43,
+        "created_at": "2026-10-28T11:19:56.830767+00:00"
+      }
+    ],
+    "recorded_at": "2026-10-28T19:20:15+0800"
+  },
+  {
+    "mode": "hybrid",
+    "scenario": "S2",
+    "incident_id": "inc_01m613tvpcva8tsy2jbejqv34t",
+    "run_id": "run_01m613tvq3yjzh3rxzqfnvcnax",
+    "run_status": "needs_human",
+    "stop_reason": "unknown_exit",
+    "usage": {
+      "tokens_in": 24857,
+      "tokens_out": 3083,
+      "iterations_used": 15,
+      "tool_calls_used": 9
+    },
+    "report": {
+      "id": "rpt_01m613vdsvdnc14y031xbpy6je",
+      "run_id": "run_01m613tvq3yjzh3rxzqfnvcnax",
+      "version_no": 1,
+      "status": "final",
+      "conclusion": {
+        "summary": "模型未产出可解析的结构化报告。",
+        "key_findings": [],
+        "next_manual_steps": [
+          "人工复查事件与资产状态"
+        ]
+      },
+      "hypotheses": [],
+      "evidence_refs": [
+        "ev_01m613ty88wdr6he8fx76phnj7",
+        "ev_01m613ty8cmq3exrekc3gqtc6n",
+        "ev_01m613ty8z4cept1hjmyy54kp3",
+        "ev_01m613v046y57dx67myazq02e4",
+        "ev_01m613v046y57dx67myazq02e5",
+        "ev_01m613v05cs1et54xw4n0cpgyr",
+        "ev_01m613v266sntarr08x14rkt9k",
+        "ev_01m613v268sq0spps5ms49qsc8",
+        "ev_01m613v26kz8dra8g6c5xr2p56"
+      ],
+      "unknown_note": {
+        "reason": "模型最终输出无法解析为诊断报告 JSON",
+        "is_unknown": true,
+        "missing_information": [
+          "重新发起诊断或人工排查"
+        ]
+      },
+      "generator": {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+        "rag_mode": "hybrid",
+        "prompt_version": "d2-v1"
+      },
+      "generated_at": "2026-10-28T11:20:45.115427Z",
+      "created_at": "2026-10-28T11:20:45.114117Z"
+    },
+    "evidence": [
+      {
+        "id": "ev_01m613ty88wdr6he8fx76phnj7",
+        "source_type": "health",
+        "collector": "http.health_check",
+        "status": "ok",
+        "summary": "http.health_check OK: body={\"status\": \"ok\", \"app\": \"demo-app\", \"version\": \"demo-1.0\"}, content_type=application/json, http_status=200"
+      },
+      {
+        "id": "ev_01m613ty8cmq3exrekc3gqtc6n",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=3, hits=[{'version_id': 'kbv_01m6105zwfrtfcb94rgk5xpkt4', 'document_id': 'kb_01m6105zwfrtfcb94rgk5xpkt3', 'doc_type': 'postmortem', 'title': '复盘：Python 服务容器 OOM（S2 类）', "
+      },
+      {
+        "id": "ev_01m613ty8z4cept1hjmyy54kp3",
+        "source_type": "infra",
+        "collector": "docker.inspect",
+        "status": "ok",
+        "summary": "docker.inspect OK: container_id=efda37083ce5df868a49886c9a3035643c27fc014586c88677e444cb128bbdf0, error=, exit_code=0, finished_at=2026-10-28T05:10:29.819989735Z, oom_killed=False, restart_count=0, ru"
+      },
+      {
+        "id": "ev_01m613v046y57dx67myazq02e4",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "unavailable",
+        "summary": "prometheus.query unavailable (METRIC_TEMPLATE_NOT_ALLOWED): metric template 'memory_usage' not in instance allowlist"
+      },
+      {
+        "id": "ev_01m613v046y57dx67myazq02e5",
+        "source_type": "knowledge",
+        "collector": "knowledge.search",
+        "status": "ok",
+        "summary": "knowledge.search OK: hit_count=0, mode=text-only, note=published runbook versions only; drafts are not executable guidance, runbooks=[]"
+      },
+      {
+        "id": "ev_01m613v05cs1et54xw4n0cpgyr",
+        "source_type": "log",
+        "collector": "docker.logs",
+        "status": "ok",
+        "summary": "docker.logs OK: container_id=efda37083ce5df868a49886c9a3035643c27fc014586c88677e444cb128bbdf0, logs=['[demo-app] 172.20.0.10 \"GET /metrics HTTP/1.1\" 200 -', '[demo-app] 172.20.0.10 \"GET /metrics HTTP/"
+      },
+      {
+        "id": "ev_01m613v266sntarr08x14rkt9k",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "unavailable",
+        "summary": "prometheus.query unavailable (METRIC_TEMPLATE_NOT_ALLOWED): metric template 'container_memory_working_set' not in instance allowlist"
+      },
+      {
+        "id": "ev_01m613v268sq0spps5ms49qsc8",
+        "source_type": "metric",
+        "collector": "prometheus.query",
+        "status": "unavailable",
+        "summary": "prometheus.query unavailable (METRIC_TEMPLATE_NOT_ALLOWED): metric template 'cpu_usage' not in instance allowlist"
+      },
+      {
+        "id": "ev_01m613v26kz8dra8g6c5xr2p56",
+        "source_type": "trace",
+        "collector": "otel.query",
+        "status": "ok",
+        "summary": "otel.query OK: note=no traces matched (service/time range), traces=[]"
+      }
+    ],
+    "retrieval_events": [
+      {
+        "query": "容器 OOM Docker 内存超限 RAG 服务",
+        "filters": {
+          "mode": "hybrid",
+          "doc_types": [
+            "postmortem",
+            "guide"
+          ],
+          "all_assets": true,
+          "environment": "sandbox",
+          "authorized_asset_count": 0,
+          "embedding_model_version": "e5-small-384-v1"
+        },
+        "result_version_ids": [
+          "kbv_01m6105zwfrtfcb94rgk5xpkt4",
+          "kbv_01m6105zy4yvcqpchn1nv80h2e",
+          "kbv_acc_e5"
+        ],
+        "ranks": {
+          "text": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zwfrtfcb94rgk5xpkt4_0",
+              "version_id": "kbv_01m6105zwfrtfcb94rgk5xpkt4"
+            },
+            {
+              "rank": 2,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rank": 3,
+              "score": 0.0,
+              "chunk_id": "kcc_dbg1_0",
+              "version_id": "kbv_dbg1"
+            }
+          ],
+          "final": [
+            {
+              "rrf": 0.03278688524590164,
+              "rank": 1,
+              "chunk_id": "kcc_01m6105zwfrtfcb94rgk5xpkt4_0",
+              "version_id": "kbv_01m6105zwfrtfcb94rgk5xpkt4"
+            },
+            {
+              "rrf": 0.0315136476426799,
+              "rank": 2,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rrf": 0.016129032258064516,
+              "rank": 3,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            }
+          ],
+          "vector": [
+            {
+              "rank": 1,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zwfrtfcb94rgk5xpkt4_0",
+              "version_id": "kbv_01m6105zwfrtfcb94rgk5xpkt4"
+            },
+            {
+              "rank": 2,
+              "score": 0.0,
+              "chunk_id": "kcc_acc_e5_0",
+              "version_id": "kbv_acc_e5"
+            },
+            {
+              "rank": 3,
+              "score": 0.0,
+              "chunk_id": "kcc_01m61051q7zgmj8ex39mvzwqce_0",
+              "version_id": "kbv_01m61051q7zgmj8ex39mvzwqce"
+            },
+            {
+              "rank": 4,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610604dq9am3xb6zdn7f2yk_0",
+              "version_id": "kbv_01m610604dq9am3xb6zdn7f2yk"
+            },
+            {
+              "rank": 5,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6105zy4yvcqpchn1nv80h2e_0",
+              "version_id": "kbv_01m6105zy4yvcqpchn1nv80h2e"
+            },
+            {
+              "rank": 6,
+              "score": 0.0,
+              "chunk_id": "kcc_01m610607yqwxdqh8nxr2g8ack_0",
+              "version_id": "kbv_01m610607yqwxdqh8nxr2g8ack"
+            },
+            {
+              "rank": 7,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106006692a5mt6xwm312gc_0",
+              "version_id": "kbv_01m6106006692a5mt6xwm312gc"
+            },
+            {
+              "rank": 8,
+              "score": 0.0,
+              "chunk_id": "kcc_01m6106065hg18cfghkjcayhdf_0",
+              "version_id": "kbv_01m6106065hg18cfghkjcayhdf"
+            }
+          ]
+        },
+        "used_by_agent": true,
+        "latency_ms": 46,
+        "created_at": "2026-10-28T11:20:29.192108+00:00"
+      }
+    ],
+    "recorded_at": "2026-10-28T19:20:46+0800"
+  }
+]

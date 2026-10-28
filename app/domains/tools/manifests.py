@@ -158,6 +158,40 @@ MYSQL_MANIFEST = ConnectorManifest(
     asset_types=("database",),
 )
 
+KNOWLEDGE_MANIFEST = ConnectorManifest(
+    connector_id="knowledge",
+    display_name="历史知识检索（RAG；平台内部能力，无外部连接器实例）",
+    version="1.0.0",
+    capabilities=(
+        CapabilitySpec(
+            key="retrieve_incidents",
+            description=(
+                "检索已发布的历史事故复盘/经验知识（按资产/环境/关键词，权限前置过滤，"
+                "返回引用与适用条件）。历史知识只引导下一步排查方向，"
+                "不得单独证明当前故障根因"
+            ),
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            collector="knowledge.search",
+            connector_code="knowledge",
+            input_model="RetrieveIncidentsInput",
+        ),
+        CapabilitySpec(
+            key="search_runbooks",
+            description=(
+                "检索已发布的 Runbook 操作指导（关键词匹配已发布版本，环境白名单过滤，"
+                "返回引用）。Runbook 仅为人工操作指导，不含任何执行授权"
+            ),
+            source_type=EvidenceSourceType.KNOWLEDGE,
+            collector="knowledge.search",
+            connector_code="knowledge",
+            input_model="SearchRunbooksInput",
+        ),
+    ),
+    environments=("sandbox", "staging", "production"),
+    asset_types=(),  # 知识检索不限资产类型；权限按 Run 授权快照资产集合过滤
+    rate_limit_per_run=8,
+)
+
 BUILTIN_MANIFESTS: dict[str, ConnectorManifest] = {
     m.connector_id: m
     for m in (
@@ -167,6 +201,7 @@ BUILTIN_MANIFESTS: dict[str, ConnectorManifest] = {
         PROM_MANIFEST,
         OTEL_MANIFEST,
         MYSQL_MANIFEST,
+        KNOWLEDGE_MANIFEST,
     )
 }
 

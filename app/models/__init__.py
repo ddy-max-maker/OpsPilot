@@ -11,6 +11,16 @@ from app.models.base import Base
 from app.models.connector import ConnectorInstance, ConnectorType, SecretRef
 from app.models.evidence import DiagnosticReport, Evidence, Hypothesis
 from app.models.incident import Incident
+from app.models.knowledge import (
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeStatus,
+    KnowledgeVersion,
+    RetrievalEvent,
+    Runbook,
+    RunbookStatus,
+    RunbookVersion,
+)
 from app.models.outbox import ApiIdempotencyKey, OutboxEvent
 from app.models.registry import AssetObservabilityBinding, CapabilityManifest, CapabilityTestRun
 from app.models.run import InvestigationRun, RunEvent
@@ -35,9 +45,17 @@ __all__ = [
     "Hypothesis",
     "Incident",
     "InvestigationRun",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
+    "KnowledgeStatus",
+    "KnowledgeVersion",
     "OutboxEvent",
+    "RetrievalEvent",
     "Role",
     "RunEvent",
+    "Runbook",
+    "RunbookStatus",
+    "RunbookVersion",
     "SecretRef",
     "User",
     "UserRole",

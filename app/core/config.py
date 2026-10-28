@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     agent_api_key_env: str | None = None  # 如 DEEPSEEK_API_KEY
     # OpenAI 兼容自定义 API 地址（deepseek 缺省官方 https://api.deepseek.com/v1）
     agent_api_base: str | None = None
-    agent_prompt_version: str = "d2-v1"
+    agent_prompt_version: str = "d4-v1"
 
     # ---- Run 预算默认值（服务端硬限制，ADR-8；超限强制终止）----
     budget_max_tool_calls: int = 24
@@ -88,6 +88,23 @@ class Settings(BaseSettings):
 
     # ---- 停止条件（IMPLEMENTATION_PLAN §2.2：连续 N 轮无新证据 → no_new_evidence）----
     no_new_evidence_rounds: int = 3
+
+    # ===== D4：知识库与 RAG（IMPLEMENTATION_PLAN §3.2 / PRD §6）=====
+
+    # RAG 检索模式：off（D3 行为）| text-only（关键词/全文）| hybrid（文本+pgvector）
+    rag_mode: str = "off"
+
+    # Embedding Provider：local_e5（本地 intfloat/multilingual-e5-small，384 维，
+    # 需安装 embedding 依赖组）| fake（确定性哈希向量，CI 使用）
+    embedding_provider: str = "local_e5"
+    embedding_model_name: str = "intfloat/multilingual-e5-small"
+    embedding_dimension: int = 384
+    # e5 上下文 512 token；分块上限取安全值（中文约 1 token/字）
+    embedding_max_chunk_chars: int = 450
+    chunking_version: str = "1"
+    # 检索默认参数
+    rag_retrieve_limit: int = 5
+    rag_max_chunks_per_hit: int = 3
 
     @property
     def agent_api_key(self) -> str | None:

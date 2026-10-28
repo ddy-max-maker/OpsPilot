@@ -78,11 +78,19 @@ def _parse_version(version: str) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class ResolvedInstance:
-    """一次工具调用的实例解析结果（配置 + 实例标识，进 Evidence 审计）。"""
+    """一次工具调用的实例解析结果（配置 + 实例标识，进 Evidence 审计）。
+
+    source 标记解析路径（D4 安全修复）：
+    - "binding"：按授权资产的观测绑定解析（配置含绑定级 config，服务标签可信）；
+    - "default"：单一 enabled 实例默认（实例级 service 默认值仅在该实例
+      未被其他资产的 service 绑定共用时允许使用，防止错误映射到其他服务）；
+    - "fallback"：D2 兼容路径（测试直连 connector_configs）。
+    """
 
     instance_id: str
     connector_code: str
     config: dict[str, Any] = field(default_factory=dict)
+    source: str = "fallback"
 
 
 class ConnectorResolutionError(RuntimeError):
@@ -99,6 +107,9 @@ class ResolutionMap:
 
     enabled_by_type: dict[str, list[ResolvedInstance]] = field(default_factory=dict)
     bindings: dict[tuple[str, str], ResolvedInstance] = field(default_factory=dict)
+    # D4：显式声明了 service 的绑定所用实例集合——共享实例的 service 默认值
+    # 不得被未绑定资产借用（防止查询映射到其他服务）
+    service_bound_instances: frozenset[str] = field(default_factory=frozenset)
 
     def resolve(self, connector_code: str, asset_id: str) -> ResolvedInstance:
         """按 (资产, 连接器类型) 解析实例；歧义/缺失抛 ConnectorResolutionError。"""
@@ -146,22 +157,37 @@ async def load_resolution_map(
     for instance, ctype in rows:
         cfg = dict(instance.config or {})
         m.enabled_by_type.setdefault(ctype.code, []).append(
-            ResolvedInstance(instance_id=instance.id, connector_code=ctype.code, config=cfg)
+            ResolvedInstance(
+                instance_id=instance.id, connector_code=ctype.code, config=cfg, source="default"
+            )
         )
+
+    def _find(code: str, instance_id: str) -> ResolvedInstance | None:
+        return next(
+            (i for i in m.enabled_by_type.get(code, []) if i.instance_id == instance_id), None
+        )
+
+    service_bound = frozenset(
+        bound.instance_id
+        for binding, ctype in binding_rows
+        if (binding.config or {}).get("service")
+        for bound in (_find(ctype.code, binding.instance_id),)
+        if bound is not None
+    )
     for binding, ctype in binding_rows:
-        bound = next(
-            (
-                i
-                for i in m.enabled_by_type.get(ctype.code, [])
-                if i.instance_id == binding.instance_id
-            ),
-            None,
-        )
+        bound = _find(ctype.code, binding.instance_id)
         if bound is None:
             continue
         merged = dict(bound.config)
         merged.update(dict(binding.config or {}))
         m.bindings[(binding.asset_id, ctype.code)] = ResolvedInstance(
-            instance_id=bound.instance_id, connector_code=ctype.code, config=merged
+            instance_id=bound.instance_id,
+            connector_code=ctype.code,
+            config=merged,
+            source="binding",
         )
-    return m
+    return ResolutionMap(
+        enabled_by_type=m.enabled_by_type,
+        bindings=m.bindings,
+        service_bound_instances=service_bound,
+    )

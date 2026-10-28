@@ -161,6 +161,36 @@ async def request_cancel_flag(
     return result.rowcount == 1
 
 
+async def record_execution_snapshot(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    run_id: str,
+    fence_token: int,
+    snapshot: dict[str, Any],
+) -> bool:
+    """D4 安全修复③：认领后写入实际执行快照（fencing 校验，可审计）。"""
+    async with session_factory() as session:
+        result = cast(
+            CursorResult[Any],
+            await session.execute(
+                text(
+                    """
+                    UPDATE investigation_runs
+                    SET execution_snapshot = CAST(:snapshot AS jsonb), updated_at = now()
+                    WHERE id = :run_id AND fence_token = :fence_token
+                    """
+                ),
+                {
+                    "run_id": run_id,
+                    "fence_token": fence_token,
+                    "snapshot": _to_json(snapshot),
+                },
+            ),
+        )
+        await session.commit()
+    return result.rowcount == 1
+
+
 def _to_json(value: dict[str, Any]) -> str:
     import json
 

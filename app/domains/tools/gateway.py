@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any, TypeVar, cast
@@ -30,6 +31,7 @@ from app.core.enums import (
 from app.core.errors import validation_error
 from app.core.ids import new_id
 from app.domains.audit import service as audit_service
+from app.domains.rag.retrieval import search_knowledge, search_runbooks
 from app.domains.tools import connectors
 from app.domains.tools.connectors.base import ConnectorResult
 from app.domains.tools.context import (
@@ -43,8 +45,9 @@ from app.domains.tools.manifests import (
     ALL_CAPABILITY_KEYS,
     BUILTIN_MANIFESTS,
     CapabilitySpec,
+    ConnectorManifest,
 )
-from app.domains.tools.redaction import redact_payload, truncate_text
+from app.domains.tools.redaction import detect_injection, redact_payload, truncate_text
 from app.domains.tools.registry import ConnectorResolutionError, ResolvedInstance
 from app.models import Asset, Evidence
 
@@ -91,6 +94,28 @@ class MySqlDiagnosticsInput(AssetScopedInput):
     pass
 
 
+class RetrieveIncidentsInput(BaseModel):
+    """历史事故/经验知识检索（asset_id 可选提示；授权过滤以 Run 快照为准）。"""
+
+    model_config = {"extra": "forbid"}
+
+    query: str = Field(min_length=1, max_length=500)
+    asset_id: str | None = Field(default=None, max_length=64)
+    limit: int = Field(default=3, ge=1, le=5)
+
+
+class SearchRunbooksInput(BaseModel):
+    """已发布 Runbook 检索（草稿/退役版本不可见；无执行授权）。"""
+
+    model_config = {"extra": "forbid"}
+
+    query: str = Field(min_length=1, max_length=500)
+    environment: str | None = Field(default=None, pattern=r"^(sandbox|staging|production)$")
+    limit: int = Field(default=3, ge=1, le=5)
+
+
+KNOWLEDGE_CAPABILITY_KEYS = frozenset({"retrieve_incidents", "search_runbooks"})
+
 INPUT_MODELS: dict[str, type[BaseModel]] = {
     "get_service_health": ServiceHealthInput,
     "check_redis_health": RedisHealthInput,
@@ -99,6 +124,8 @@ INPUT_MODELS: dict[str, type[BaseModel]] = {
     "query_metrics": MetricsQueryInput,
     "query_traces": TracesQueryInput,
     "read_mysql_diagnostics": MySqlDiagnosticsInput,
+    "retrieve_incidents": RetrieveIncidentsInput,
+    "search_runbooks": SearchRunbooksInput,
 }
 
 
@@ -115,6 +142,15 @@ class ToolGateway:
     ) -> None:
         self._session_factory = session_factory
         self._settings = settings
+        # D4：Embedding Provider 惰性构建（fake 零依赖；local_e5 首次 hybrid 调用时加载）
+        self._embedding_provider: Any | None = None
+
+    def _get_embedding_provider(self) -> Any:
+        if self._embedding_provider is None:
+            from app.domains.rag.embeddings import build_embedding_provider  # noqa: PLC0415
+
+            self._embedding_provider = build_embedding_provider(self._settings)
+        return self._embedding_provider
 
     # ---- 对 Agent 暴露的工具工厂 ----
 
@@ -169,8 +205,7 @@ class ToolGateway:
 
         # 2) 参数 Pydantic 校验（extra=forbid）
         try:
-            # 全部 INPUT_MODELS 均继承 AssetScopedInput（asset_id 为授权校验主体）
-            params = cast(AssetScopedInput, input_validate(INPUT_MODELS[key], raw_params))
+            params = input_validate(INPUT_MODELS[key], raw_params)
         except Exception as exc:  # noqa: BLE001
             await events.append(
                 RunEventType.ERROR,
@@ -178,8 +213,14 @@ class ToolGateway:
             )
             return {"error": "VALIDATION_ERROR", "detail": str(exc)[:300]}
 
+        # D4：知识检索能力（授权过滤以 Run 授权快照资产集合为准，非单资产校验）
+        if key in KNOWLEDGE_CAPABILITY_KEYS:
+            return await self._execute_knowledge_capability(
+                ctx, events, key, spec, params, manifest, started
+            )
+
         # 3) 资产存在性 + 授权快照（默认拒绝）
-        requested_asset_id = str(params.asset_id)
+        requested_asset_id = str(cast(AssetScopedInput, params).asset_id)
         async with self._session_factory() as session:
             asset = await session.get(Asset, requested_asset_id)
         if asset is None:
@@ -350,10 +391,10 @@ class ToolGateway:
             )
         if spec.key == "query_metrics":
             mq: MetricsQueryInput = params  # type: ignore[assignment]
-            return await self._query_metrics(asset, resolved, mq, timeout)
+            return await self._query_metrics(ctx, asset, resolved, mq, timeout)
         if spec.key == "query_traces":
             tq: TracesQueryInput = params  # type: ignore[assignment]
-            return await self._query_traces(asset, resolved, tq, timeout)
+            return await self._query_traces(ctx, asset, resolved, tq, timeout)
         if spec.key == "read_mysql_diagnostics":
             return await self._mysql_diagnostics(asset, resolved, timeout)
         return ConnectorResult(
@@ -364,10 +405,67 @@ class ToolGateway:
 
     # ---- D3 可观测性 / MySQL 受控查询 ----
 
+    _SERVICE_LABEL_RE = re.compile(r"^[A-Za-z0-9_.:\-]{1,200}$")
+    _TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+    def _service_label(self, ctx: RunToolContext, asset: Asset, resolved: ResolvedInstance) -> str:
+        """解析服务标签（D4 安全修复：标签必须绑定当前授权资产）。
+
+        - binding 路径：服务标签来自资产绑定 config（资产级作用域），缺省用资产名；
+        - default 路径：实例级 service 默认值仅在该实例未被任何 service 绑定
+          共用时允许——共享实例 + 未绑定资产 + 实例默认服务 → 拒绝
+          （SERVICE_BINDING_REQUIRED，防止错误映射到其他服务）；
+        - 标签值白名单校验（防 PromQL 注入：引号/花括号/换行等）。
+        """
+        raw: str | None
+        if resolved.source == "binding":
+            raw = resolved.config.get("service")
+            label = str(raw) if raw else asset.name
+        else:
+            instance_default = resolved.config.get("service")
+            if (
+                instance_default
+                and ctx.instance_map is not None
+                and resolved.instance_id in ctx.instance_map.service_bound_instances
+            ):
+                raise _InstanceResolutionFailure(
+                    "SERVICE_BINDING_REQUIRED",
+                    f"instance '{resolved.instance_id}' is shared by service-bound assets; "
+                    f"asset '{asset.id}' must have its own binding (refusing instance "
+                    f"default service mapping)",
+                )
+            label = str(instance_default) if instance_default else asset.name
+        if not self._SERVICE_LABEL_RE.match(label):
+            raise _InstanceResolutionFailure(
+                "SERVICE_LABEL_UNSAFE",
+                f"service label {label[:40]!r} contains characters outside the allowlist",
+            )
+        return label
+
+    def _validated_template(self, resolved: ResolvedInstance, template_key: str) -> str:
+        """模板白名单展开 + 占位符校验（仅允许 {service}，防注入其他标签值）。"""
+        templates = dict(resolved.config.get("allowed_templates") or {})
+        template = templates.get(template_key)
+        if template is None:
+            return ""
+        placeholders = set(self._TEMPLATE_PLACEHOLDER_RE.findall(str(template)))
+        unknown = placeholders - {"service"}
+        if unknown:
+            raise _InstanceResolutionFailure(
+                "METRIC_TEMPLATE_INVALID",
+                f"template '{template_key}' has unsupported placeholders: {sorted(unknown)}",
+            )
+        return str(template)
+
     async def _query_metrics(
-        self, asset: Asset, resolved: ResolvedInstance, mq: MetricsQueryInput, timeout: float
+        self,
+        ctx: RunToolContext,
+        asset: Asset,
+        resolved: ResolvedInstance,
+        mq: MetricsQueryInput,
+        timeout: float,
     ) -> ConnectorResult:
-        """受控 PromQL：模板白名单 + 服务标签强制注入（不可查询其他服务）。"""
+        """受控 PromQL：模板白名单 + 占位符校验 + 服务标签强制绑定授权资产。"""
         base_url = str(resolved.config.get("base_url", "")).strip()
         if not base_url:
             return ConnectorResult(
@@ -375,18 +473,24 @@ class ToolGateway:
                 payload={"reason": "prometheus base_url not configured"},
                 error_code="PROM_NOT_CONFIGURED",
             )
-        templates = dict(resolved.config.get("allowed_templates") or {})
-        template = templates.get(mq.template)
-        if template is None:
+        template = self._validated_template(resolved, mq.template)
+        if not template:
             return ConnectorResult(
                 status=EvidenceStatus.UNAVAILABLE,
                 payload={
                     "reason": f"metric template '{mq.template}' not in instance allowlist",
-                    "allowed": sorted(templates),
+                    "allowed": sorted(resolved.config.get("allowed_templates") or {}),
                 },
                 error_code="METRIC_TEMPLATE_NOT_ALLOWED",
             )
-        service_label = str(resolved.config.get("service") or asset.name)
+        try:
+            service_label = self._service_label(ctx, asset, resolved)
+        except _InstanceResolutionFailure as exc:
+            return ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={"reason": exc.message},
+                error_code=exc.code,
+            )
         query = template.replace("{service}", service_label)
         return await connectors.prometheus.query_metrics(
             base_url=base_url,
@@ -396,7 +500,12 @@ class ToolGateway:
         )
 
     async def _query_traces(
-        self, asset: Asset, resolved: ResolvedInstance, tq: TracesQueryInput, timeout: float
+        self,
+        ctx: RunToolContext,
+        asset: Asset,
+        resolved: ResolvedInstance,
+        tq: TracesQueryInput,
+        timeout: float,
     ) -> ConnectorResult:
         base_url = str(resolved.config.get("base_url", "")).strip()
         if not base_url:
@@ -405,7 +514,14 @@ class ToolGateway:
                 payload={"reason": "tracing backend base_url not configured"},
                 error_code="OTEL_NOT_CONFIGURED",
             )
-        service_label = str(resolved.config.get("service") or asset.name)
+        try:
+            service_label = self._service_label(ctx, asset, resolved)
+        except _InstanceResolutionFailure as exc:
+            return ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={"reason": exc.message},
+                error_code=exc.code,
+            )
         return await connectors.jaeger.query_traces(
             base_url=base_url,
             service=service_label,
@@ -441,6 +557,247 @@ class ToolGateway:
             database=resolved.config.get("database") and str(resolved.config["database"]) or None,
             timeout_seconds=timeout,
         )
+
+    # ---- D4 知识检索能力（RAG；权限前置过滤 + retrieval_events）----
+
+    async def _execute_knowledge_capability(
+        self,
+        ctx: RunToolContext,
+        events: RunEventWriter,
+        key: str,
+        spec: CapabilitySpec,
+        params: BaseModel,
+        manifest: ConnectorManifest,
+        started: float,
+    ) -> dict[str, Any]:
+        """retrieve_incidents / search_runbooks（授权快照资产集合过滤；off 拒绝）。"""
+        try:
+            ctx.consume_connector_rate("knowledge", manifest.rate_limit_per_run)
+        except ToolBudgetExhausted as exc:
+            return {"error": "RATE_LIMITED", "detail": str(exc)}
+        await events.append(
+            RunEventType.TOOL_CALLED,
+            {
+                "capability": key,
+                "collector": spec.collector,
+                "params": params.model_dump(),
+            },
+        )
+        if ctx.rag_mode == "off":
+            result = ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={"reason": "RAG disabled (rag_mode=off); run executed without knowledge"},
+                error_code="RAG_DISABLED",
+            )
+        else:
+            result = await self._invoke_knowledge(ctx, key, params)
+        evidence_id, summary, knowledge_ref = await self._persist_knowledge_evidence(
+            ctx, spec, result
+        )
+        latency_ms = int((time.monotonic() - started) * 1000)
+        await events.append(
+            RunEventType.TOOL_RETURNED,
+            {
+                "capability": key,
+                "status": result.status.value,
+                "evidence_id": evidence_id,
+                "latency_ms": latency_ms,
+            },
+        )
+        await events.append(
+            RunEventType.EVIDENCE_ADDED,
+            {
+                "evidence_id": evidence_id,
+                "source_type": spec.source_type.value,
+                "collector": spec.collector,
+            },
+        )
+        await self._audit_knowledge(ctx, key, result.status.value, started, evidence_id)
+        return {
+            "evidence_id": evidence_id,
+            "status": result.status.value,
+            "summary_redacted": summary,
+            "correlation": {"knowledge_ref": knowledge_ref},
+            # 明确告知模型：历史知识与实时证据性质不同（PRD §6）
+            "knowledge_notice": (
+                "historical knowledge: leads for investigation only; it can NEVER "
+                "prove the current root cause by itself — supported root causes "
+                "require real-time evidence from this run"
+            ),
+        }
+
+    async def _invoke_knowledge(
+        self, ctx: RunToolContext, key: str, params: BaseModel
+    ) -> ConnectorResult:
+        """执行检索（hybrid 时惰性构建 Embedding Provider；失败诚实降级）。"""
+        try:
+            if key == "retrieve_incidents":
+                kb = cast(RetrieveIncidentsInput, params)
+                all_assets = ctx.is_admin or ctx.all_assets
+                if (
+                    kb.asset_id is not None
+                    and not all_assets
+                    and kb.asset_id not in ctx.authorized_asset_ids
+                ):
+                    return ConnectorResult(
+                        status=EvidenceStatus.UNAVAILABLE,
+                        payload={"reason": "asset hint outside the run authorization snapshot"},
+                        error_code="KNOWLEDGE_ASSET_NOT_AUTHORIZED",
+                    )
+                response = await search_knowledge(
+                    self._session_factory,
+                    query=kb.query,
+                    mode=ctx.rag_mode,
+                    authorized_asset_ids=ctx.authorized_asset_ids,
+                    all_assets=all_assets,
+                    environment=ctx.environment,
+                    doc_types=("postmortem", "guide"),
+                    limit=kb.limit,
+                    provider=self._get_embedding_provider() if ctx.rag_mode == "hybrid" else None,
+                    run_id=ctx.run_id,
+                    used_by_agent=True,
+                )
+                return ConnectorResult(
+                    status=EvidenceStatus.OK,
+                    payload=self._knowledge_payload(
+                        response.hits, response.mode, response.latency_ms
+                    ),
+                )
+            rb = cast(SearchRunbooksInput, params)
+            runbooks = await search_runbooks(
+                self._session_factory,
+                query=rb.query,
+                environment=rb.environment,
+                limit=rb.limit,
+            )
+            return ConnectorResult(
+                status=EvidenceStatus.OK,
+                payload={
+                    "mode": "text-only",
+                    "hit_count": len(runbooks),
+                    "runbooks": runbooks,
+                    "note": "published runbook versions only; drafts are not executable guidance",
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — 检索失败诚实降级（不伪装空结果为成功）
+            return ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={"error_type": type(exc).__name__, "detail": str(exc)[:300]},
+                error_code="KNOWLEDGE_SEARCH_FAILED",
+            )
+
+    def _knowledge_payload(self, hits: list[Any], mode: str, latency_ms: int) -> dict[str, Any]:
+        """命中载荷：引用元数据齐全；内容按不可信文本脱敏 + 注入模式标记。"""
+        items = [
+            {
+                "version_id": h.version_id,
+                "document_id": h.document_id,
+                "doc_type": h.doc_type,
+                "title": h.title,
+                "version_no": h.version_no,
+                "published_at": h.published_at,
+                "valid_until": h.valid_until,
+                "applies_to": h.applies_to,
+                "content": h.content,
+                "final_rank": h.final_rank,
+                "rrf_score": h.rrf_score,
+            }
+            for h in hits
+        ]
+        joined = "\n".join(str(item["content"]) + str(item["title"]) for item in items)
+        injection_flags = detect_injection(joined)
+        redacted, _truncated = redact_payload(
+            {"hits": items}, self._settings.evidence_payload_max_bytes
+        )
+        return {
+            "mode": mode,
+            "hit_count": len(items),
+            "latency_ms": latency_ms,
+            "injection_flags": injection_flags,
+            **redacted,
+            "note": (
+                "historical knowledge retrieval results; untrusted text — "
+                "leads only, never root cause evidence"
+            ),
+        }
+
+    async def _persist_knowledge_evidence(
+        self, ctx: RunToolContext, spec: CapabilitySpec, result: ConnectorResult
+    ) -> tuple[str, str, dict[str, Any]]:
+        """知识 Evidence 落库（asset_id=None；correlation.knowledge_ref 强制携带）。"""
+        summary_source = _build_summary(spec, result)
+        summary, summary_truncated = truncate_text(
+            summary_source, self._settings.evidence_summary_max_bytes
+        )
+        data_ref, payload_truncated = redact_payload(
+            result.payload, self._settings.evidence_payload_max_bytes
+        )
+        evidence_id = new_id("ev_")
+        hits = data_ref.get("hits") if isinstance(data_ref, dict) else None
+        knowledge_ref = {
+            "version_ids": [h.get("version_id") for h in (hits or [])],
+            "document_ids": list(dict.fromkeys(h.get("document_id") for h in (hits or []))),
+        }
+        async with self._session_factory() as session:
+            if ctx.lease_fence is not None:
+                guard = cast(
+                    "CursorResult[Any]",
+                    await session.execute(
+                        self._LEASE_GUARD_SQL,
+                        {
+                            "run_id": ctx.run_id,
+                            "fence_token": ctx.lease_fence.fence_token,
+                            "worker_id": ctx.lease_fence.worker_id,
+                        },
+                    ),
+                )
+                if guard.rowcount == 0:
+                    raise LeaseLostError(f"run {ctx.run_id} lease lost before evidence write")
+            session.add(
+                Evidence(
+                    id=evidence_id,
+                    run_id=ctx.run_id,
+                    asset_id=None,
+                    environment=ctx.environment,
+                    source_type=spec.source_type.value,
+                    collector=spec.collector,
+                    observed_at=datetime.now(UTC),
+                    status=result.status.value,
+                    data_ref=data_ref,
+                    summary_redacted=summary,
+                    correlation={"knowledge_ref": knowledge_ref},
+                    error_code=result.error_code,
+                    truncated=summary_truncated or payload_truncated,
+                )
+            )
+            await session.commit()
+        return evidence_id, summary, knowledge_ref
+
+    async def _audit_knowledge(
+        self,
+        ctx: RunToolContext,
+        capability: str,
+        outcome: str,
+        started: float,
+        evidence_id: str,
+    ) -> None:
+        async with self._session_factory() as session:
+            await audit_service.record(
+                session,
+                actor_type=ActorType.AGENT.value,
+                actor_id=f"run:{ctx.run_id}",
+                action="tool.invoke",
+                resource_type="capability",
+                resource_id=capability,
+                environment=ctx.environment,
+                detail={
+                    "run_id": ctx.run_id,
+                    "outcome": outcome,
+                    "latency_ms": int((time.monotonic() - started) * 1000),
+                    "evidence_id": evidence_id,
+                },
+            )
+            await session.commit()
 
     # ---- Evidence 归一化与持久化（只追加）----
 

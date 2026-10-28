@@ -55,6 +55,9 @@ class InvestigationRun(Base, TimestampMixin):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     authorization_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    # D4：实际执行快照（Worker 认领时写入：真实 provider/model/prompt 版本/RAG 模式/
+    # embedding 版本——与创建时的 model_config 区分，供审计追溯）
+    execution_snapshot: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     langgraph_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
     stop_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 取消请求标志：API 置位，Worker 在步进循环与工具调用前轮询（合作式取消）

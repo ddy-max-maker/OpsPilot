@@ -29,6 +29,12 @@ _TOOL_PLAN = (
     ("read_mysql_diagnostics", ("database",)),
 )
 
+# D4：RAG 开启时前置知识检索步骤（确定性验证知识工具链路 + 证据语义）
+_KNOWLEDGE_STEPS = (
+    ("retrieve_incidents", None),
+    ("search_runbooks", None),
+)
+
 _TYPE_RE = re.compile(r"type=([a-z]+)")
 
 _ASSET_RE = re.compile(r"as_[0-9a-z_]+")
@@ -43,6 +49,8 @@ class FakeDiagnoserChatModel(BaseChatModel):
     """
 
     model_name: str = "fake-diagnoser"
+    # D4：RAG 开启时（Worker 按设置注入）前置知识检索步骤；默认关闭保持 D2/D3 计划
+    include_knowledge_steps: bool = False
 
     @property
     def _llm_type(self) -> str:
@@ -69,21 +77,29 @@ class FakeDiagnoserChatModel(BaseChatModel):
         incident_id = incident_match.group(0) if incident_match else ""
         asset_type = type_match.group(1) if type_match else ""
 
-        plan = [
-            name
-            for name, applicable in _TOOL_PLAN
-            if applicable is None or asset_type in applicable
+        plan: list[tuple[str, tuple[str, ...] | None]] = []
+        if self.include_knowledge_steps:
+            plan.extend(_KNOWLEDGE_STEPS)
+        plan.extend(_TOOL_PLAN)
+        steps = [
+            name for name, applicable in plan if applicable is None or asset_type in applicable
         ]
+        # 知识检索查询词：取事件标题（任务提示首行"诊断故障事件 inc_x：标题"）
+        title_match = re.search(r"诊断故障事件\s+\S+：(.+)", human_text)
+        knowledge_query = (title_match.group(1).strip() if title_match else "")[:200] or "故障排查"
 
         # 下一轮工具调用（或计划完成 → 生成报告）
-        if ai_calls < len(plan):
-            tool_name = plan[ai_calls]
+        if ai_calls < len(steps):
+            tool_name = steps[ai_calls]
+            args: dict[str, Any] = {"asset_id": asset_id}
+            if tool_name == "retrieve_incidents" or tool_name == "search_runbooks":
+                args = {"query": knowledge_query, "limit": 3}
             message = AIMessage(
-                content=f"（fake 计划第 {ai_calls + 1}/{len(plan)} 步）",
+                content=f"（fake 计划第 {ai_calls + 1}/{len(steps)} 步）",
                 tool_calls=[
                     {
                         "name": tool_name,
-                        "args": {"asset_id": asset_id},
+                        "args": args,
                         "id": f"call_{ai_calls + 1}",
                     }
                 ],

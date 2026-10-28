@@ -2,10 +2,11 @@
 
 企业级智能运维故障诊断与受控恢复平台（全新实现，不迁移旧 OpsPilot 代码）。
 
-当前仓库状态：**D3 完成**（Capability Registry + 可观测性标准化接入 +
-Java+Python 跨语言诊断 + MySQL 只读诊断 + 证据质量语义 + 租约 TOCTOU 原子化）。
-D1/D2 能力全部保留；不含 RAG / RabbitMQ / MCP / Action Service / 自动修复
-（见 docs/IMPLEMENTATION_PLAN.md 的 D4 及后续阶段）。
+当前仓库状态：**D4 完成**（企业历史故障知识库与 RAG：知识生命周期 + 四眼复核 +
+PostgreSQL 全文/pgvector 混合检索 + Agent 知识工具 + RAG 消融实验；
+含 D3 安全修复：Jaeger 归属校验、Prometheus 服务标签绑定、执行快照审计）。
+D1/D2/D3 能力全部保留；不含 MCP / RabbitMQ / Action Service / 自动修复
+（见 docs/IMPLEMENTATION_PLAN.md 的 D5 及后续阶段）。
 
 ## 技术栈
 
@@ -170,6 +171,66 @@ powershell -File scripts/demo/faults.ps1 inject M1     # MySQL 慢查询负载
 powershell -File scripts/demo/faults.ps1 recover M1
 ```
 
+## D4 企业历史故障知识库与 RAG
+
+### 架构与红线
+
+- **知识生命周期**（CONTRACTS §2.9）：`draft → reviewed → published → superseded/retired`，
+  发布必须经人工复核（**四眼：reviewed_by ≠ created_by，服务端强制**）；
+  发布/退役/版本变更写审计；未发布/过期/退役知识对 Agent 不可见。
+- **检索红线**：权限、状态、有效期、资产范围、环境过滤**全部发生在 SQL 排序之前**
+  （`applies_to.asset_ids` 与 Run 授权快照按资产粒度求交；不做"全局 Top-K 后 Python 剔除"）。
+- **知识不是证据**：`source_type=knowledge` 的检索结果即使 status=ok 也**永不参与
+  supported 根因支撑**（`classify_evidence(source_type="knowledge") → KNOWLEDGE 质量，
+  `root_cause_capable=False`）；历史相似性只引导排查方向，supported 根因必须由本
+  Run 实时业务观测支撑（runtime 服务端强制降级 + Prompt 双保险）。
+- **混合检索**（仅 PostgreSQL，无独立向量库）：text-only = simple 全文 + 逐词 ILIKE；
+  hybrid = 文本路 + pgvector 余弦距离路，RRF（k=60）融合；每路得分/最终排名/命中
+  版本写 `retrieval_events`。小规模知识集采用过滤后精确向量排序（召回正确性优先，
+  HNSW 索引按契约建立）。
+- **Embedding 版本化**：`knowledge_versions` 记录 embedding_model/model_version/
+  vector_dimension/chunking_version；检索强制过滤 model_version——换模型 = 新增
+  版本向量行，不覆盖历史索引。
+
+### Embedding Provider
+
+| Provider | 模型 | 维度 | 用途 |
+|---|---|---|---|
+| `local_e5`（默认） | intfloat/multilingual-e5-small（query/passage 前缀） | 384 | 真实语义检索（需 `uv sync --group embedding`） |
+| `fake` | 确定性哈希向量 | 384 | CI（不联网、无 API Key） |
+
+### D4 API 与 Web
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET/POST /knowledge/documents`、`GET /knowledge/documents/{id}` | 文档与版本管理 |
+| `POST /knowledge/documents/{id}/versions` | 追加草稿版本 |
+| `POST /knowledge/versions/{id}/review` | 人工复核（四眼校验） |
+| `POST /knowledge/versions/{id}/publish` / `retire` | 发布（构建向量索引）/ 退役 |
+| `GET /knowledge/search` | 权限前置过滤 + text/hybrid 检索（返回引用与得分） |
+| `POST /knowledge/from-report/{run_id}` | 诊断报告 → 知识草稿（人工触发，不自动发布） |
+| `GET/POST /runbooks`、`POST /runbooks/{id}/versions` | Runbook 管理（草稿不可执行） |
+| `POST /runbooks/versions/{id}/publish` / `retire` | 发布 / 退役 |
+
+Agent 工具（Tool Gateway，受预算/限流/审计约束）：`retrieve_incidents`（历史事故
+复盘/guide）、`search_runbooks`（已发布 Runbook 引用）。每次检索写 `retrieval_events`
+（模式/过滤/命中/每路排名/耗时/used_by_agent）；知识内容按不可信文本处理
+（脱敏 + Prompt Injection 模式标记）。
+
+Web 控制台新增"知识库"页：检索、创建草稿、复核/发布/退役、Runbook 查看。
+
+### D4 演示与消融实验
+
+```bash
+uv run python scripts/demo/seed_knowledge.py     # 8 场景知识集（幂等）
+
+# worker 以对应模式 + DeepSeek 启动后（shell 覆盖 RAG_MODE / AGENT_PROVIDER 等）：
+powershell -File scripts/demo/faults.ps1 inject S1
+uv run python scripts/rag_experiment.py --mode hybrid --scenario S1 --password '...'
+powershell -File scripts/demo/faults.ps1 recover S1
+# 对照：--mode off / text-only / hybrid × S1、M1（核心固定场景）；J2/S2 单模式补充
+```
+
 ## 演示（D1-B 链路）
 
 ```bash
@@ -262,7 +323,9 @@ OpsPilot-Next/
 │   │   ├── runs/             # D2：InvestigationRun 创建/取消/查询（DB 为业务权威）
 │   │   ├── tools/            # D2/D3：Tool Gateway + manifest + registry（按资产解析实例）+ 连接器 + 脱敏
 │   │   ├── agent/            # D2：AgentRuntime/Provider/Fake 模型/Prompts（ADR-D2）
-│   │   └── integrations/     # D3：连接器实例注册/测试/启停 + 能力发现服务
+│   │   ├── integrations/     # D3：连接器实例注册/测试/启停 + 能力发现服务
+│   │   ├── knowledge/        # D4：知识生命周期（四眼复核/发布/退役/报告转草稿）
+│   │   └── rag/              # D4：Embedding Provider + 分块 + 混合检索（RRF）
 │   ├── worker/               # D2：DB 认领（SKIP LOCKED）+ 租约心跳 + fence_token fencing
 │   └── api/
 │       ├── deps.py           # Session/当前用户/RBAC/范围依赖注入
@@ -273,8 +336,8 @@ OpsPilot-Next/
 ├── demo-java/                # D3：Java Spring Boot 演示服务（健康/业务/指标/OTel 链路 + J1/J2/J3 故障注入）
 ├── web/                      # 最小 Web 控制台（nginx:1.27-alpine + 原生 JS，真实调 API；含诊断与连接器管理入口）
 ├── scripts/                  # seed.py / simulate_alert.py / seed_demo.py / run_scenario.py / demo/faults.ps1
-├── .github/workflows/ci.yml  # CI：Ruff + mypy + pytest（真实 PG）+ Alembic 空库演练（含 D3 表校验）
-├── alembic/                  # 迁移脚本（async env.py；0001 初始 + 0002 D2 诊断域 + 0003 D3 注册中心）
+├── .github/workflows/ci.yml  # CI：Ruff + mypy + pytest（真实 PG）+ Alembic 空库演练（含 D3/D4 表校验）
+├── alembic/                  # 迁移脚本（async env.py；0001 初始 + 0002 D2 + 0003 D3 + 0004 D4 知识库/pgvector）
 ├── tests/                    # 单元测试 + 真实 PostgreSQL 集成测试（含 worker/gateway/roproxy/integrations/迁移演练）
 ├── docker-compose.yml        # postgres + api + web + worker + docker-ro-proxy + demo(profile)
 └── pyproject.toml            # uv/依赖/Ruff/mypy/pytest 配置
