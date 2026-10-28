@@ -425,7 +425,11 @@ def _rabbitmq_available() -> bool:
 
 @pytest.mark.skipif(not _rabbitmq_available(), reason="RabbitMQ not reachable on 127.0.0.1:5672")
 async def test_outbox_dispatch_idempotent(client, world, db_session_factory) -> None:
-    """Outbox 投递：pending → dispatched；重复 dispatch 零重复投递。"""
+    """Outbox 投递：pending → dispatched；重复 dispatch 零重复投递。
+
+    使用测试专用队列绑定同一 exchange（topic 复制）——不受本地演示环境中
+    活跃 ops-action 消费者影响；生产队列的消费行为由 consumer 测试覆盖。
+    """
     import aio_pika
 
     await _enqueue_execution(client, world)
@@ -433,10 +437,11 @@ async def test_outbox_dispatch_idempotent(client, world, db_session_factory) -> 
     connection = await aio_pika.connect_robust(settings.rabbitmq_url)
     try:
         channel = await connection.channel()
-        _exchange, queue = await declare_topology(channel)
-        # 清空既有消息（其他测试残留），确保断言确定性
-        while (stale := await queue.get(fail=False, timeout=0.2)) is not None:
-            await stale.ack()
+        exchange, _queue = await declare_topology(channel)
+        # 测试专用队列（无消费者；消息留存供断言）
+        probe_queue = await channel.declare_queue("test.outbox.probe", durable=False)
+        await probe_queue.bind(exchange, routing_key="action.execute_requested")
+        await probe_queue.purge()
 
         dispatched = await dispatch_batch(db_session_factory, channel, settings)
         assert dispatched == 1
@@ -445,7 +450,7 @@ async def test_outbox_dispatch_idempotent(client, world, db_session_factory) -> 
                 (await session.execute(text("SELECT status FROM outbox_events"))).scalars().all()
             )
             assert statuses == ["dispatched"]
-        msg = await queue.get(fail=False, timeout=2)
+        msg = await probe_queue.get(fail=False, timeout=2)
         assert msg is not None
         payload = json.loads(msg.body)
         assert payload["execution_id"]
@@ -453,6 +458,6 @@ async def test_outbox_dispatch_idempotent(client, world, db_session_factory) -> 
 
         # 第二次 dispatch：无 pending 事件 → 0 条（不重复投递）
         assert await dispatch_batch(db_session_factory, channel, settings) == 0
-        assert await queue.get(fail=False, timeout=0.5) is None
+        assert await probe_queue.get(fail=False, timeout=0.5) is None
     finally:
         await connection.close()
