@@ -19,6 +19,7 @@ from app.api.v1 import (
     incidents,
     integrations,
     knowledge,
+    proposals,
     runbooks,
     runs,
     webhooks,
@@ -35,3 +36,4 @@ api_router.include_router(runs.router)
 api_router.include_router(integrations.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(runbooks.router)
+api_router.include_router(proposals.router)

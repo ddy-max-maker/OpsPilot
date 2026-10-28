@@ -65,11 +65,14 @@ class RetrievalResponse:
 
 # ---- 权限/时效过滤（SQL 前置，两条检索路共用）----
 # jsonb_exists_any/jsonb_exists 为 ?| / ? 运算符的函数形式（避免驱动参数解析歧义）
+# D5 修复④：sensitivity=restricted 仅对全量授权视角（admin/all_assets）可见——
+# 不能仅凭环境标签或"通用知识（applies_to 为空）"泄露给非全量授权用户。
 
 _FILTER_SQL = """
     v.status = 'published'
     AND (v.valid_from IS NULL OR v.valid_from <= now())
     AND (v.valid_until IS NULL OR v.valid_until > now())
+    AND (v.sensitivity = 'internal' OR CAST(:all_assets AS boolean))
     AND (
         CAST(:all_assets AS boolean)
         OR COALESCE(jsonb_array_length(v.applies_to->'asset_ids'), 0) = 0
@@ -119,8 +122,11 @@ async def _text_route(
     all_assets: bool,
     environment: str | None,
     limit: int,
-) -> list[RetrievalHit]:
-    """文本路：PostgreSQL 全文（simple 配置）+ 逐词 ILIKE 兜底（多语言关键词）。"""
+) -> list[tuple[RetrievalHit, float]]:
+    """文本路：PostgreSQL 全文（simple 配置）+ 逐词 ILIKE 兜底（多语言关键词）。
+
+    D5 修复③：返回 (hit, route_score)——真实文本相关性分数进 retrieval_events。
+    """
     tokens = [t for t in query.split() if t]
     likes = [f"%{t}%" for t in tokens]
     sql = text(
@@ -154,7 +160,7 @@ async def _text_route(
     if doc_types is not None:
         params["doc_types"] = list(doc_types)
     rows = (await session.execute(sql, params)).all()
-    return [_hit_from_row(r) for r in rows]
+    return [(_hit_from_row(r), float(r.route_score)) for r in rows]
 
 
 async def _vector_route(
@@ -167,8 +173,11 @@ async def _vector_route(
     environment: str | None,
     model_version: str,
     limit: int,
-) -> list[RetrievalHit]:
-    """向量路：pgvector 余弦距离；**过滤在排序前**（SQL WHERE），精确距离排序。"""
+) -> list[tuple[RetrievalHit, float]]:
+    """向量路：pgvector 余弦距离；**过滤在排序前**（SQL WHERE），精确距离排序。
+
+    D5 修复③：返回 (hit, route_score)——真实余弦距离进 retrieval_events。
+    """
     sql = text(
         f"""
         SELECT {_SELECT_COLUMNS},
@@ -199,7 +208,7 @@ async def _vector_route(
     await session.execute(text("SET LOCAL enable_indexscan = off"))
     await session.execute(text("SET LOCAL enable_bitmapscan = off"))
     rows = (await session.execute(sql, params)).all()
-    return [_hit_from_row(r) for r in rows]
+    return [(_hit_from_row(r), float(r.route_score)) for r in rows]
 
 
 def _annotate(route: str, hits: list[RetrievalHit], scores: list[float]) -> list[RetrievalHit]:
@@ -304,10 +313,10 @@ async def search_knowledge(
         )
     route_limit = max(limit, _ROUTE_LIMIT_DEFAULT)
     routes: dict[str, list[RetrievalHit]] = {}
-    scores_by_route: dict[str, list[float]] = {}
     async with session_factory() as session:
         if mode in ("text-only", "hybrid"):
-            rows = await _text_route(
+            # D5 修复③：携带真实 route_score（此前 getattr(hits) 恒 0.0）
+            hits_with_scores = await _text_route(
                 session,
                 query=query,
                 doc_types=doc_types,
@@ -316,8 +325,9 @@ async def search_knowledge(
                 environment=environment,
                 limit=route_limit,
             )
-            scores_by_route["text"] = [float(getattr(r, "route_score", 0.0)) for r in rows]
-            routes["text"] = _annotate("text", rows, scores_by_route["text"])
+            routes["text"] = _annotate(
+                "text", [h for h, _ in hits_with_scores], [s for _, s in hits_with_scores]
+            )
         provider_version: str | None = None
         if mode == "hybrid":
             if provider is None:
@@ -325,9 +335,11 @@ async def search_knowledge(
 
                 provider = get_embedding_provider()
             provider_version = provider.model_version
-            rows = await _vector_route(
+            # D5 修复①：查询向量在工作线程推理（不阻塞事件循环）
+            query_vector = await provider.aembed_query(query)
+            hits_with_scores = await _vector_route(
                 session,
-                query_vector=provider.embed_query(query),
+                query_vector=query_vector,
                 doc_types=doc_types,
                 asset_ids=asset_ids,
                 all_assets=all_assets,
@@ -335,8 +347,9 @@ async def search_knowledge(
                 model_version=provider.model_version,
                 limit=route_limit,
             )
-            scores_by_route["vector"] = [float(getattr(r, "route_score", 0.0)) for r in rows]
-            routes["vector"] = _annotate("vector", rows, scores_by_route["vector"])
+            routes["vector"] = _annotate(
+                "vector", [h for h, _ in hits_with_scores], [s for _, s in hits_with_scores]
+            )
 
     if not routes:
         final: list[RetrievalHit] = []

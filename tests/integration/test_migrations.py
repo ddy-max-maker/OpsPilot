@@ -80,11 +80,17 @@ def test_alembic_upgrade_and_downgrade_cycle() -> None:
             "retrieval_events",
             "runbooks",
             "runbook_versions",
+            # D5：审批与受控执行表族
+            "proposals",
+            "approvals",
+            "action_executions",
+            "action_idempotency",
+            "verification_results",
             "incidents",
             "alerts",
         ):
             assert expected in tables, expected
-        assert version is not None and version[0] == "0004_d4_knowledge"
+        assert version is not None and version[0] == "0005_d5_execution"
         assert schemas == {"langgraph"}  # ADR-5
 
         # head → base：可完整回滚

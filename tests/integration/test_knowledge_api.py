@@ -412,3 +412,89 @@ async def test_runbook_lifecycle_and_search(client, ready_admin) -> None:
     detail = await client.get(f"{RB}", headers=ready_admin)
     rb = [r for r in detail.json()["data"]["runbooks"] if r["name"] == "Redis 连接池扩容手册"]
     assert rb and rb[0]["status"] == "published"
+
+
+# ---- D5 修复验证：发布先索引后 published / restricted 敏感级 ----
+
+
+async def test_publish_embedding_failure_keeps_reviewed(
+    client, ready_admin, db_session_factory, monkeypatch
+) -> None:
+    """索引失败 → 版本保持 reviewed（不被当作完整发布）；旧 published 版本仍可检索。"""
+    reviewer = await _second_admin(client, db_session_factory)
+    doc_id, v1 = await _create_doc(client, ready_admin)
+    await _publish(client, reviewer, v1)
+
+    # 新版本：向量索引失败（模拟 Embedding 异常）
+    nv = await client.post(
+        f"{KB}/documents/{doc_id}/versions",
+        json={"content": "v2：索引会失败的版本。Redis 连接池耗尽补充分析。"},
+        headers=ready_admin,
+    )
+    v2 = nv.json()["data"]["version_id"]
+    rv = await client.post(f"{KB}/versions/{v2}/review", headers=reviewer)
+    assert rv.status_code == 200
+
+    async def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("embedding backend unavailable")
+
+    import pytest as _pytest
+
+    monkeypatch.setattr(kb_service, "build_version_embeddings", _boom)
+    # ASGITransport 透传服务端异常（等价线上 500）：发布失败
+    with _pytest.raises(RuntimeError, match="embedding backend unavailable"):
+        await client.post(f"{KB}/versions/{v2}/publish", headers=reviewer)
+    monkeypatch.undo()
+
+    # v2 未被当作完整发布：状态仍是 reviewed；旧 published（v1）继续可检索
+    detail = await client.get(f"{KB}/documents/{doc_id}", headers=ready_admin)
+    statuses = {v["version_no"]: v["status"] for v in detail.json()["data"]["versions"]}
+    assert statuses[1] == "published"
+    assert statuses[2] == "reviewed"
+    hits = await _search(client, ready_admin, "Redis 连接池耗尽")
+    assert hits and hits[0]["version_id"] == v1
+
+    # 修复后重新发布成功（真实索引路径恢复）
+    republished = await client.post(f"{KB}/versions/{v2}/publish", headers=reviewer)
+    assert republished.status_code == 200
+    detail = await client.get(f"{KB}/documents/{doc_id}", headers=ready_admin)
+    statuses = {v["version_no"]: v["status"] for v in detail.json()["data"]["versions"]}
+    assert statuses[1] == "superseded"
+    assert statuses[2] == "published"
+
+
+async def test_restricted_knowledge_requires_all_assets(
+    client, ready_admin, operator_headers, db_session_factory
+) -> None:
+    """restricted 知识仅全量授权视角（Admin）可见；环境标签/通用范围不构成泄露路径。"""
+    reviewer = await _second_admin(client, db_session_factory)
+    # restricted + 通用范围（applies_to 为空）——非全量授权用户不得召回
+    _, v_restricted = await _create_doc(
+        client,
+        ready_admin,
+        title="Restricted 内部密钥轮换复盘",
+        content="内部密钥轮换流程与凭据位置说明，restricted 敏感级。",
+        sensitivity="restricted",
+        applies_to={"asset_ids": [], "environments": ["sandbox"]},
+    )
+    await _publish(client, reviewer, v_restricted)
+    # 对照组：internal 通用知识
+    _, v_internal = await _create_doc(
+        client,
+        ready_admin,
+        title="Internal 通用巡检指南",
+        content="常规巡检步骤与日志检查方法，internal 敏感级。",
+    )
+    await _publish(client, reviewer, v_internal)
+
+    # Admin（all_assets）：两类都可见
+    admin_hits = await _search(client, ready_admin, "密钥轮换 巡检")
+    admin_versions = {h["version_id"] for h in admin_hits}
+    assert v_restricted in admin_versions
+    assert v_internal in admin_versions
+
+    # operator（sandbox 只读、非全量授权）：仅 internal，restricted 被前置过滤
+    op_hits = await _search(client, operator_headers, "密钥轮换 巡检")
+    op_versions = {h["version_id"] for h in op_hits}
+    assert v_internal in op_versions
+    assert v_restricted not in op_versions

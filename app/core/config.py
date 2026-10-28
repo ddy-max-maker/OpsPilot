@@ -106,6 +106,32 @@ class Settings(BaseSettings):
     rag_retrieve_limit: int = 5
     rag_max_chunks_per_hit: int = 3
 
+    # ===== D5：审批与受控恢复（IMPLEMENTATION_PLAN §3.3）=====
+
+    # RabbitMQ（Outbox Publisher 与 ops-action Consumer 共用；凭据不入 Git）
+    rabbitmq_url: str = "amqp://opspilot:opspilot@localhost:5672/%2F"
+    # Outbox dispatcher：轮询间隔 / 单批上限 / 最大尝试次数 / 重试退避基数
+    outbox_poll_interval_seconds: float = 1.0
+    outbox_batch_size: int = 50
+    outbox_max_attempts: int = 8
+    outbox_retry_backoff_seconds: float = 5.0
+    # ops-action 执行器实例标识（缺省主机名+pid）
+    action_executor_id: str | None = None
+    # 基础设施兜底：容器名前缀白名单（allowlist 之外一律拒绝；
+    # 与应用层 environment 字段相互独立——ops-action 容器自身权限即演示环境）
+    action_container_name_prefix: str = "opspilot-demo-"
+    # 幂等账本收敛：claimed 超过该时长仍无结果的执行按崩溃处理（启动扫描 + 周期扫描）
+    idempotency_claim_timeout_seconds: int = 600
+    # 恢复验证：观察窗口总时长 / 探测间隔 / 窗口内需连续通过的探测次数
+    verification_observation_window_seconds: int = 30
+    verification_probe_interval_seconds: int = 5
+    verification_min_passing_probes: int = 3
+    # 验证探测超时（对目标服务/Redis 的健康检查 HTTP/TCP 超时）
+    verification_probe_timeout_seconds: float = 3.0
+    # 审批链路时效：提案等待审批窗口 / 审批通过后的可执行窗口
+    proposal_ttl_seconds: int = 3600
+    approval_execution_window_seconds: int = 1800
+
     @property
     def agent_api_key(self) -> str | None:
         """按间接引用的环境变量名读取 API Key（缺省 None → 仅 fake 可用）。"""

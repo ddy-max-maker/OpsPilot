@@ -65,7 +65,8 @@ ALL_TABLES = (
     "connector_types, connector_instances, secret_refs, "
     "capability_manifests, capability_test_runs, asset_observability_bindings, "
     "knowledge_documents, knowledge_versions, knowledge_chunks, knowledge_embeddings, "
-    "retrieval_events, runbooks, runbook_versions"
+    "retrieval_events, runbooks, runbook_versions, "
+    "proposals, approvals, action_executions, action_idempotency, verification_results"
 )
 
 

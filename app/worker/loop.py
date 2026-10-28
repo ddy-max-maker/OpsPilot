@@ -88,6 +88,22 @@ class AgentWorker:
         else:
             handle = build_chat_model(self._settings)
         self._model_handle = handle
+        # D5 修复①：RAG 开启时后台预热 Embedding 模型（不阻塞 startup/心跳/取消）
+        self._embedding_warmup_task: asyncio.Task | None = None
+        if self._settings.rag_mode != "off":
+            provider = self._gateway._get_embedding_provider()
+            if not provider.ready:
+
+                async def _warm() -> None:
+                    try:
+                        await asyncio.to_thread(provider.warm_up)
+                        logger.info("embedding model warmed up (%s)", provider.model_version)
+                    except Exception:  # noqa: BLE001 — 预热失败记录 load_error，检索侧显式降级
+                        logger.exception(
+                            "embedding warm-up failed; retrieval will degrade (KNOWLEDGE_WARMING)"
+                        )
+
+                self._embedding_warmup_task = asyncio.create_task(_warm())
         from app.domains.agent.runtime import RuntimeDeps  # noqa: PLC0415
 
         deps = RuntimeDeps(

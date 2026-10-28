@@ -785,3 +785,78 @@ async def test_knowledge_only_root_cause_demoted(
         assert any("历史知识" in str(m) for m in rows[0]["missing_information"])
     finally:
         await pool.close()
+
+
+# ---- D5 修复验证：模型未就绪显式降级 / route_score 真实记录 ----
+
+
+class _NotReadyProvider(FakeEmbeddingProvider):
+    """模拟冷启动中/预热失败的 e5：ready=False 且带 load_error。"""
+
+    @property
+    def ready(self) -> bool:  # noqa: FBT001
+        return False
+
+    @property
+    def load_error(self) -> str | None:
+        return "model warming up (cold start)"
+
+
+async def test_embedding_not_ready_degrades_explicitly(
+    gw, db_session_factory, db_engine, clean_db, monkeypatch
+) -> None:
+    """hybrid 模式下模型未就绪 → KNOWLEDGE_WARMING 显式降级（不伪装检索成功）。"""
+    await truncate_all(db_engine)
+    await _seed_published_doc(db_session_factory, title="t", content="c")
+    run_id = await _seed_run_row(db_session_factory)
+    ctx = _ctx(run_id, rag_mode="hybrid")
+    events = await RunEventWriter.create(db_session_factory, run_id)
+    spec = ALL_CAPABILITY_KEYS["retrieve_incidents"]
+
+    # gateway 内部取 provider 的路径替换为未就绪实例
+    monkeypatch.setattr(type(gw), "_get_embedding_provider", lambda self: _NotReadyProvider())
+    out = await gw.execute_capability(
+        ctx, events, "retrieve_incidents", spec, {"query": "anything"}
+    )
+    assert out["status"] == "unavailable"
+    async with db_session_factory() as session:
+        ev = await session.get(Evidence, out["evidence_id"])
+        assert ev.error_code == "KNOWLEDGE_WARMING"
+        assert "warming" in str(ev.data_ref.get("detail") or "")
+
+
+async def test_route_scores_recorded_real_values(
+    gw, db_session_factory, db_engine, clean_db
+) -> None:
+    """retrieval_events.ranks 记录真实 text/vector 分数（非恒 0 占位）。"""
+    await truncate_all(db_engine)
+    await _seed_published_doc(
+        db_session_factory,
+        title="Redis 连接池耗尽复盘",
+        content="历史故障：Redis 连接池耗尽导致超时。处理：扩容 maxclients 并修复连接泄漏。",
+    )
+    run_id = await _seed_run_row(db_session_factory)
+    ctx = _ctx(run_id, rag_mode="hybrid")
+    events = await RunEventWriter.create(db_session_factory, run_id)
+    spec = ALL_CAPABILITY_KEYS["retrieve_incidents"]
+    out = await gw.execute_capability(
+        ctx, events, "retrieve_incidents", spec, {"query": "Redis 连接池耗尽 超时"}
+    )
+    assert out["status"] == "ok"
+    async with db_session_factory() as session:
+        ranks = (
+            (
+                await session.execute(
+                    text("SELECT ranks FROM retrieval_events WHERE run_id = :r"),
+                    {"r": run_id},
+                )
+            )
+            .mappings()
+            .first()
+        )["ranks"]
+    text_scores = [e["score"] for e in ranks.get("text", [])]
+    vector_scores = [e["score"] for e in ranks.get("vector", [])]
+    assert text_scores and any(s > 0.0 for s in text_scores), ranks
+    assert vector_scores and all(s > 0.0 for s in vector_scores), ranks  # 余弦距离恒非零
+    final = ranks.get("final", [])
+    assert final and all(e["rrf"] > 0.0 for e in final)

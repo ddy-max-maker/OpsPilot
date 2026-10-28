@@ -165,3 +165,8 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
 .empty { text-align: center; color: var(--muted); padding: 32px 0; }
 .error-text { color: var(--danger); font-size: 13px; margin-top: 8px; }
 .mono { font-family: Consolas, monospace; font-size: 12px; }
+
+/* D5：审批执行页补充样式 */
+.error { color: var(--danger, #b91c1c); font-size: 13px; }
+pre.pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; margin: 0; }
+.table.kv th { width: 140px; text-align: left; color: #475569; background: #f8fafc; }

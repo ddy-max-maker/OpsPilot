@@ -220,13 +220,23 @@ async def publish_version(
     version_id: str,
     provider: EmbeddingProvider,
 ) -> KnowledgeVersion:
-    """发布：reviewed → published；构建向量索引；旧 published 版本自动 superseded。"""
+    """发布：reviewed → published；**先建向量索引再置 published**（D5 修复②）。
+
+    索引失败 → 版本保持 reviewed（不会被当作完整发布），旧 published 版本
+    继续可检索；索引成功 → 置 published 并自动 supersede 旧版本。
+    """
     version = await get_version_or_404(session, version_id)
     require_kb_transition(version.status, KnowledgeStatus.PUBLISHED)
     if version.reviewed_by is None:
         raise conflict_state("version must be reviewed before publish")
     if version.reviewed_by == version.created_by:
         raise conflict_state("four-eyes violation recorded on this version")
+    # 向量索引先行（独立事务；失败抛出 → 未发布，旧 published 版本不受影响）
+    await build_version_embeddings(
+        session_factory,
+        version_id=version.id,
+        provider=provider,
+    )
     now = datetime.now(UTC)
     if version.valid_from is None:
         version.valid_from = now
@@ -250,12 +260,6 @@ async def publish_version(
         require_kb_transition(other.status, KnowledgeStatus.SUPERSEDED)
         other.status = KnowledgeStatus.SUPERSEDED
     await session.commit()
-    # 向量索引（独立事务：发布成功后构建；幂等）
-    await build_version_embeddings(
-        session_factory,
-        version_id=version.id,
-        provider=provider,
-    )
     async with session_factory() as session2:
         await audit_service.record(
             session2,

@@ -796,7 +796,246 @@ async function loadIntegrationsView() {
   });
 }
 
-// ---- 路由 ----
+// ---- D5：审批执行（提案 / 审批 / 执行 / 恢复验证）----
+
+const PROPOSAL_STATUS_LABELS = {
+  draft: "草稿", pending_approval: "待审批", approved: "已批准", rejected: "已拒绝",
+  expired: "已过期", executing: "执行中", executed: "已执行",
+  execution_failed: "执行失败", execution_unknown: "执行未知",
+  verified: "已验证恢复", verify_failed: "验证失败", verify_unknown: "验证未知",
+  canceled: "已取消",
+};
+
+function proposalBadge(status) {
+  const map = {
+    pending_approval: "orange", approved: "green", rejected: "red", expired: "muted",
+    executing: "orange", executed: "green", execution_failed: "red",
+    execution_unknown: "orange", verified: "green", verify_failed: "red",
+    verify_unknown: "orange",
+  };
+  return `<span class="badge ${map[status] || "muted"}">${esc(PROPOSAL_STATUS_LABELS[status] || status)}</span>`;
+}
+
+async function loadProposalsView() {
+  $app.innerHTML = '<div class="card"><h2>审批执行</h2><p class="muted">加载中…</p></div>';
+  let data, assetsData, runbooksData, runsData;
+  try {
+    [data, assetsData, runbooksData, runsData] = await Promise.all([
+      api("/proposals"),
+      api("/assets"),
+      api("/runbooks"),
+      api("/runs"),
+    ]);
+  } catch (err) { showError(err); return; }
+  const proposals = (data && data.proposals) || [];
+  const assets = (assetsData && assetsData.assets) || [];
+  const runbooks = (runbooksData && runbooksData.runbooks) || [];
+  const runs = (runsData && (runsData.runs || runsData.items)) || [];
+  const canDecide = me.roles.includes("approver") || me.roles.includes("admin");
+
+  const rows = proposals.map((p) => `
+    <tr data-id="${esc(p.id)}">
+      <td class="mono">${esc(p.id.slice(0, 14))}…</td>
+      <td>${proposalBadge(p.status)}</td>
+      <td><span class="badge muted">${esc(p.risk_level)}</span></td>
+      <td><span class="badge ${envBadge(p.environment)}">${esc(p.environment)}</span></td>
+      <td class="mono">${esc((p.parameters || {}).container_name || "-")}</td>
+      <td>${fmtTime(p.created_at)}</td>
+      <td><button class="btn" data-open="${esc(p.id)}">详情</button></td>
+    </tr>`).join("");
+
+  $app.innerHTML = `
+    <div class="card">
+      <div class="row between">
+        <h2>审批执行</h2>
+        <button id="toggle-proposal-form" class="btn ghost">新建提案</button>
+      </div>
+      <p class="muted">提案必须引用已发布 Runbook 版本；production 目标一律拒绝；执行前需四眼审批与快照复核。</p>
+      <form id="proposal-form" class="hidden form-grid">
+        <label>诊断 Run<select id="pf-run" required>
+          <option value="">选择 run…</option>
+          ${runs.map((r) => `<option value="${esc(r.id)}">${esc(r.id)}（${esc(r.status)}）</option>`).join("")}
+        </select></label>
+        <label>Runbook 版本<select id="pf-rbv" required>
+          <option value="">选择已发布版本…</option>
+          ${(runbooks || []).flatMap((rb) => (rb.versions || [])
+            .filter((v) => v.status === "published")
+            .map((v) => `<option value="${esc(v.id)}">${esc(rb.name)} v${v.version_no}（${esc(v.risk_level)}）</option>`)).join("")}
+        </select></label>
+        <label>目标资产<select id="pf-asset" required>
+          <option value="">选择资产…</option>
+          ${assets.map((a) => `<option value="${esc(a.id)}">${esc(a.name)}（${esc(a.environment)}）</option>`).join("")}
+        </select></label>
+        <label>环境<select id="pf-env" required>
+          <option value="sandbox">sandbox</option>
+          <option value="staging">staging</option>
+        </select></label>
+        <label>目标容器名<input id="pf-container" required pattern="opspilot-demo-[a-z0-9][a-z0-9-]*" placeholder="opspilot-demo-…" /></label>
+        <div><button type="submit" class="btn primary">提交提案</button>
+        <span id="pf-error" class="error hidden"></span></div>
+      </form>
+    </div>
+    <div class="card">
+      <table class="table">
+        <thead><tr><th>提案</th><th>状态</th><th>风险</th><th>环境</th><th>目标容器</th><th>创建时间</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="7" class="muted">暂无提案</td></tr>'}</tbody>
+      </table>
+    </div>`;
+
+  document.getElementById("toggle-proposal-form").addEventListener("click", () => {
+    document.getElementById("proposal-form").classList.toggle("hidden");
+  });
+  document.getElementById("proposal-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const errBox = document.getElementById("pf-error");
+    errBox.classList.add("hidden");
+    try {
+      await api("/proposals", {
+        method: "POST",
+        headers: { "Idempotency-Key": "web-" + crypto.randomUUID() },
+        body: JSON.stringify({
+          run_id: document.getElementById("pf-run").value,
+          runbook_version_id: document.getElementById("pf-rbv").value,
+          target_asset_id: document.getElementById("pf-asset").value,
+          environment: document.getElementById("pf-env").value,
+          parameters: { container_name: document.getElementById("pf-container").value },
+        }),
+      });
+      toast("提案已创建（待审批）");
+      await loadProposalsView();
+    } catch (err) {
+      errBox.textContent = err.message || String(err);
+      errBox.classList.remove("hidden");
+    }
+  });
+  $app.addEventListener("click", (event) => {
+    const open = event.target.closest("button[data-open]");
+    if (open) location.hash = "#/proposals/" + open.dataset.open;
+  });
+}
+
+async function loadProposalDetail(pid) {
+  $app.innerHTML = '<div class="card"><p class="muted">加载中…</p></div>';
+  let data;
+  try {
+    data = await api("/proposals/" + encodeURIComponent(pid));
+  } catch (err) { showError(err); return; }
+  const p = data.proposal;
+  const approvals = data.approvals || [];
+  const executions = data.executions || [];
+  const verifications = data.verifications || [];
+  const canDecide = me.roles.includes("approver") || me.roles.includes("admin");
+  const isCreator = p.created_by_user === me.id;
+
+  const approvalRows = approvals.map((a) => `
+    <tr><td class="mono">${esc(a.id)}</td>
+    <td><span class="badge ${a.decision === "approved" ? "green" : "red"}">${a.decision === "approved" ? "通过" : "拒绝"}</span></td>
+    <td class="mono">${esc(a.decided_by)}</td><td>${fmtTime(a.decided_at)}</td>
+    <td>${esc(a.comment || "-")}</td></tr>`).join("");
+
+  const executionRows = executions.map((e) => `
+    <tr><td class="mono">${esc(e.id)}</td>
+    <td>${proposalBadge(e.status)}</td>
+    <td class="mono">${esc(e.action_key)}</td>
+    <td class="mono">${esc(e.executor || "-")}</td>
+    <td class="mono">${esc(e.external_ref || "-")}</td>
+    <td>${fmtTime(e.started_at)} → ${fmtTime(e.finished_at)}</td></tr>`).join("");
+
+  const verificationRows = verifications.map((v) => `
+    <tr><td class="mono">${esc(v.id)}</td>
+    <td>${proposalBadge(v.status)}</td>
+    <td>${esc((v.observation_window || {}).sample_count ?? "-")} 次探测</td>
+    <td>${fmtTime(v.concluded_at)}</td></tr>`).join("");
+
+  const actions = [];
+  if (p.status === "pending_approval") {
+    if (canDecide && !isCreator) {
+      actions.push('<button class="btn primary" data-act="approve">批准</button>');
+      actions.push('<button class="btn danger" data-act="reject">拒绝</button>');
+    } else {
+      actions.push('<span class="muted">等待具备审批角色的他人处理（四眼原则）</span>');
+    }
+    actions.push('<button class="btn ghost" data-act="dry-run">Dry-run 前置检查</button>');
+  }
+  if (p.status === "approved") {
+    actions.push('<button class="btn primary" data-act="execute">执行</button>');
+  }
+  if (["pending_approval", "approved"].includes(p.status)) {
+    actions.push('<button class="btn ghost" data-act="dry-run">Dry-run 前置检查</button>');
+  }
+
+  $app.innerHTML = `
+    <div class="card">
+      <div class="row between">
+        <h2>提案 <span class="mono">${esc(p.id)}</span></h2>
+        <a href="#/proposals" class="btn ghost">返回列表</a>
+      </div>
+      <p>
+        ${proposalBadge(p.status)}
+        <span class="badge muted">风险 ${esc(p.risk_level)}</span>
+        <span class="badge ${envBadge(p.environment)}">${esc(p.environment)}</span>
+      </p>
+      <table class="table kv">
+        <tr><th>诊断 Run</th><td class="mono">${esc(p.run_id)}</td></tr>
+        <tr><th>事件</th><td class="mono">${esc(p.incident_id)}</td></tr>
+        <tr><th>Runbook 版本</th><td class="mono">${esc(p.runbook_version_id)}</td></tr>
+        <tr><th>目标资产</th><td class="mono">${esc(p.target_asset_id)}</td></tr>
+        <tr><th>参数</th><td class="mono">${esc(JSON.stringify(p.parameters))}</td></tr>
+        <tr><th>参数哈希</th><td class="mono">${esc(p.parameter_hash.slice(0, 24))}…</td></tr>
+        <tr><th>审批有效期至</th><td>${fmtTime(p.expires_at)}</td></tr>
+        <tr><th>Dry-run 快照</th><td><pre class="pre">${esc(JSON.stringify(p.preconditions_result, null, 2))}</pre></td></tr>
+      </table>
+      <div class="row">${actions.join(" ")}</div>
+      <p id="pd-msg" class="muted"></p>
+    </div>
+    <div class="card"><h3>审批记录（只追加）</h3>
+      <table class="table"><thead><tr><th>ID</th><th>决定</th><th>审批人</th><th>时间</th><th>意见</th></tr></thead>
+      <tbody>${approvalRows || '<tr><td colspan="5" class="muted">暂无审批</td></tr>'}</tbody></table>
+    </div>
+    <div class="card"><h3>动作执行</h3>
+      <table class="table"><thead><tr><th>ID</th><th>状态</th><th>动作</th><th>执行器</th><th>外部凭证</th><th>起止</th></tr></thead>
+      <tbody>${executionRows || '<tr><td colspan="6" class="muted">尚未执行</td></tr>'}</tbody></table>
+    </div>
+    <div class="card"><h3>恢复验证</h3>
+      <table class="table"><thead><tr><th>ID</th><th>结果</th><th>观察窗口</th><th>结论时间</th></tr></thead>
+      <tbody>${verificationRows || '<tr><td colspan="4" class="muted">尚未验证（仅验证 PASSED 才允许 RESOLVED）</td></tr>'}</tbody></table>
+    </div>`;
+
+  $app.querySelectorAll("button[data-act]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const act = btn.dataset.act;
+      btn.disabled = true;
+      try {
+        if (act === "dry-run") {
+          const res = await api(`/proposals/${encodeURIComponent(pid)}/dry-run`, { method: "POST" });
+          document.getElementById("pd-msg").textContent =
+            `Dry-run ${res.passed ? "通过" : "未通过"}：` +
+            (res.checks || []).map((c) => `${c.name}=${c.passed ? "✓" : "✗"}`).join("  ");
+        } else if (act === "approve") {
+          await api(`/proposals/${encodeURIComponent(pid)}/approve`, {
+            method: "POST", body: JSON.stringify({}),
+          });
+          toast("已批准");
+          await loadProposalDetail(pid);
+        } else if (act === "reject") {
+          await api(`/proposals/${encodeURIComponent(pid)}/reject`, {
+            method: "POST", body: JSON.stringify({}),
+          });
+          toast("已拒绝");
+          await loadProposalDetail(pid);
+        } else if (act === "execute") {
+          const res = await api(`/proposals/${encodeURIComponent(pid)}/execute`, { method: "POST" });
+          toast(`已入队执行（${res.execution.status}），等待 ops-action 处理`);
+          await loadProposalDetail(pid);
+        }
+      } catch (err) {
+        document.getElementById("pd-msg").textContent = "失败：" + (err.message || err);
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
 
 function setActiveNav(key) {
   document.querySelectorAll(".nav-links a").forEach((a) => {
@@ -982,6 +1221,12 @@ async function route() {
   } else if (hash === "#/knowledge") {
     setActiveNav("knowledge");
     await loadKnowledgeView();
+  } else if (hash.startsWith("#/proposals/")) {
+    setActiveNav("proposals");
+    await loadProposalDetail(decodeURIComponent(hash.slice("#/proposals/".length)));
+  } else if (hash === "#/proposals") {
+    setActiveNav("proposals");
+    await loadProposalsView();
   } else if (hash === "#/audit") {
     setActiveNav("audit");
     await loadAuditView();

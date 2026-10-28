@@ -48,6 +48,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      rabbitmq:
+        # D5：Outbox 投递与消息重投测试（确定性集成测试不操作真实容器）
+        image: rabbitmq:3.13-management
+        env:
+          RABBITMQ_DEFAULT_USER: opspilot
+          RABBITMQ_DEFAULT_PASS: opspilot
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 15s
 
     env:
       # CI 专用配置，不依赖本地 .env / .env.local / 开发机私人配置
@@ -63,6 +77,8 @@ jobs:
       # D4：CI 使用确定性 Fake Embedding + RAG off（真实 e5 验收单独执行，不进 CI）
       EMBEDDING_PROVIDER: fake
       RAG_MODE: off
+      # D5：CI RabbitMQ（Outbox/重投测试使用）
+      RABBITMQ_URL: amqp://opspilot:opspilot@localhost:5672/%2F
 
     steps:
       - uses: actions/checkout@v4
@@ -111,6 +127,12 @@ jobs:
           grep -q "retrieval_events" /tmp/tables.txt
           grep -q "runbooks" /tmp/tables.txt
           grep -q "runbook_versions" /tmp/tables.txt
+          # D5：审批与受控执行表
+          grep -q "proposals" /tmp/tables.txt
+          grep -q "approvals" /tmp/tables.txt
+          grep -q "action_executions" /tmp/tables.txt
+          grep -q "action_idempotency" /tmp/tables.txt
+          grep -q "verification_results" /tmp/tables.txt
           psql -h localhost -U opspilot -d opspilot -c "\dx" | grep -q "vector"
           # HNSW 索引按契约存在
           psql -h localhost -U opspilot -d opspilot -c "\di ix_knowledge_embeddings_hnsw" | grep -q "hnsw"

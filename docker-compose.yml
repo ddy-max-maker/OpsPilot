@@ -95,7 +95,51 @@ services:
     command: sh -c "alembic upgrade head && python -m entrypoints.worker"
     restart: unless-stopped
 
-  # ---- D2：Docker 只读代理（唯一挂载 docker.sock 的组件，ADR-11）----
+  # ---- D5：RabbitMQ（Outbox 投递 + Action Service 消费；凭据经 .env 提供）----
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: opspilot-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-opspilot}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required (copy .env.example to .env)}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  # ---- D5：ops-action 独立执行进程（唯一新增 docker.sock 挂载点；
+  # 只接受 RabbitMQ 中经业务服务授权/审批的执行请求，与 docker-ro-proxy 隔离）----
+  ops-action:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        WITH_EMBEDDING: "false"
+      network: host
+    container_name: opspilot-ops-action
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://opspilot:opspilot@postgres:5432/opspilot
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-opspilot}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+      ACTION_EXECUTOR_ID: ${ACTION_EXECUTOR_ID:-ops-action-1}
+      ACTION_CONTAINER_NAME_PREFIX: ${ACTION_CONTAINER_NAME_PREFIX:-opspilot-demo-}
+    command: sh -c "python -m entrypoints.action"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  # ---- D2：Docker 只读代理（挂载 docker.sock:ro，ADR-11；D5 起 ops-action
+  # 为第二个挂载点但读写在隔离 allowlist 内，两进程独立部署互不扩权）----
   docker-ro-proxy:
     build:
       context: .

@@ -644,6 +644,17 @@ class ToolGateway:
                         payload={"reason": "asset hint outside the run authorization snapshot"},
                         error_code="KNOWLEDGE_ASSET_NOT_AUTHORIZED",
                     )
+                provider = self._get_embedding_provider() if ctx.rag_mode == "hybrid" else None
+                if provider is not None and not provider.ready:
+                    # D5 修复①：模型预热中/预热失败 → 显式受控降级（不伪装检索成功）
+                    return ConnectorResult(
+                        status=EvidenceStatus.UNAVAILABLE,
+                        payload={
+                            "reason": "embedding model not ready; retrieval degraded",
+                            "detail": getattr(provider, "load_error", None),
+                        },
+                        error_code="KNOWLEDGE_WARMING",
+                    )
                 response = await search_knowledge(
                     self._session_factory,
                     query=kb.query,
@@ -653,7 +664,7 @@ class ToolGateway:
                     environment=ctx.environment,
                     doc_types=("postmortem", "guide"),
                     limit=kb.limit,
-                    provider=self._get_embedding_provider() if ctx.rag_mode == "hybrid" else None,
+                    provider=provider,
                     run_id=ctx.run_id,
                     used_by_agent=True,
                 )

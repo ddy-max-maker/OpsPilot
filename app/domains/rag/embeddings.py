@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import math
 import random
@@ -27,7 +28,11 @@ class EmbeddingError(RuntimeError):
 
 
 class EmbeddingProvider(ABC):
-    """Embedding 接口：模型名/版本/维度显式声明，随知识版本快照留档。"""
+    """Embedding 接口：模型名/版本/维度显式声明，随知识版本快照留档。
+
+    D5 修复：本地模型推理不得阻塞 Worker 事件循环——统一经 aembed_* 在
+    工作线程执行；ready=False 时调用方必须显式受控降级（不伪装检索成功）。
+    """
 
     model_name: str
     model_version: str
@@ -36,11 +41,25 @@ class EmbeddingProvider(ABC):
 
     @abstractmethod
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """批量嵌入知识分块（passage 语义）。"""
+        """批量嵌入知识分块（passage 语义；同步实现，勿在事件循环直接调用）。"""
 
     @abstractmethod
     def embed_query(self, text: str) -> list[float]:
-        """嵌入查询（query 语义）。"""
+        """嵌入查询（query 语义；同步实现，勿在事件循环直接调用）。"""
+
+    @property
+    def ready(self) -> bool:
+        """模型是否已就绪（fake 恒 True；本地模型加载完成前为 False）。"""
+        return True
+
+    def warm_up(self) -> None:  # noqa: B027 — 默认空实现是接口约定（fake 无需预热）
+        """预热（加载模型；允许阻塞，调用方应放在后台线程）。"""
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return await asyncio.to_thread(self.embed_documents, texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        return await asyncio.to_thread(self.embed_query, text)
 
 
 class FakeEmbeddingProvider(EmbeddingProvider):
@@ -67,7 +86,12 @@ class FakeEmbeddingProvider(EmbeddingProvider):
 
 
 class LocalE5EmbeddingProvider(EmbeddingProvider):
-    """本地 e5 多语言小模型（sentence-transformers；首次使用时加载/下载模型）。"""
+    """本地 e5 多语言小模型（sentence-transformers；首次使用时加载/下载模型）。
+
+    D5：模型加载移至 warm_up()（Worker 后台线程预热），推理经 aembed_* 在
+    工作线程执行——事件循环/心跳/取消不再被阻塞；未就绪时 ready=False，
+    调用方显式受控降级。
+    """
 
     def __init__(self, *, model_name: str, dimension: int, chunking_version: str) -> None:
         self.model_name = model_name
@@ -75,19 +99,35 @@ class LocalE5EmbeddingProvider(EmbeddingProvider):
         self.dimension = dimension
         self.chunking_version = chunking_version
         self._model: object | None = None
+        self._load_error: str | None = None
+
+    @property
+    def ready(self) -> bool:
+        return self._model is not None
+
+    @property
+    def load_error(self) -> str | None:
+        """预热失败原因（None = 无失败；供受控降级时透出，不伪装成功）。"""
+        return self._load_error
+
+    def warm_up(self) -> None:
+        if self._model is not None:
+            return
+        try:
+            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+        except ImportError as exc:  # pragma: no cover — 依赖组未安装
+            self._load_error = (
+                "embedding provider 'local_e5' requires the 'embedding' dependency "
+                "group (uv sync --group embedding)"
+            )
+            raise EmbeddingError(self._load_error) from exc
+        model = SentenceTransformer(self.model_name)
+        model.max_seq_length = 512
+        self._model = model
 
     def _ensure_model(self) -> object:
         if self._model is None:
-            try:
-                from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-            except ImportError as exc:  # pragma: no cover — 依赖组未安装
-                raise EmbeddingError(
-                    "embedding provider 'local_e5' requires the 'embedding' dependency "
-                    "group (uv sync --group embedding)"
-                ) from exc
-            model = SentenceTransformer(self.model_name)
-            model.max_seq_length = 512
-            self._model = model
+            self.warm_up()
         return self._model
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:

@@ -20,6 +20,8 @@ dependencies = [
     "psycopg[binary]>=3.3.6",
     "langchain-deepseek>=1.1.1",
     "aiomysql>=0.3.2",
+    # D5：RabbitMQ 异步客户端（Outbox Publisher / Action Service Consumer）
+    "aio-pika>=9.4.0",
 ]
 
 [dependency-groups]
@@ -87,7 +89,7 @@ warn_unused_ignores = true
 warn_return_any = true
 
 [[tool.mypy.overrides]]
-module = ["uvicorn", "alembic.*", "aiomysql", "pymysql", "sentence_transformers"]
+module = ["uvicorn", "alembic.*", "aiomysql", "pymysql", "sentence_transformers", "aio_pika"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

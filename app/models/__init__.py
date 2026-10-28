@@ -10,6 +10,17 @@ from app.models.audit import AuditEvent
 from app.models.base import Base
 from app.models.connector import ConnectorInstance, ConnectorType, SecretRef
 from app.models.evidence import DiagnosticReport, Evidence, Hypothesis
+from app.models.execution import (
+    ActionExecution,
+    ActionExecutionStatus,
+    ActionIdempotency,
+    Approval,
+    IdempotencyState,
+    Proposal,
+    ProposalStatus,
+    VerificationResult,
+    VerificationStatus,
+)
 from app.models.incident import Incident
 from app.models.knowledge import (
     KnowledgeChunk,
@@ -28,6 +39,9 @@ from app.models.user import SYSTEM_USER_ID, AssetAccessPolicy, Role, User, UserR
 
 __all__ = [
     "SYSTEM_USER_ID",
+    "ActionExecution",
+    "ActionExecutionStatus",
+    "ActionIdempotency",
     "Alert",
     "ApiIdempotencyKey",
     "Asset",
@@ -35,6 +49,7 @@ __all__ = [
     "AssetEdge",
     "AssetObservabilityBinding",
     "AuditEvent",
+    "Approval",
     "Base",
     "CapabilityManifest",
     "CapabilityTestRun",
@@ -43,6 +58,7 @@ __all__ = [
     "DiagnosticReport",
     "Evidence",
     "Hypothesis",
+    "IdempotencyState",
     "Incident",
     "InvestigationRun",
     "KnowledgeChunk",
@@ -50,6 +66,8 @@ __all__ = [
     "KnowledgeStatus",
     "KnowledgeVersion",
     "OutboxEvent",
+    "Proposal",
+    "ProposalStatus",
     "RetrievalEvent",
     "Role",
     "RunEvent",
@@ -59,4 +77,6 @@ __all__ = [
     "SecretRef",
     "User",
     "UserRole",
+    "VerificationResult",
+    "VerificationStatus",
 ]
