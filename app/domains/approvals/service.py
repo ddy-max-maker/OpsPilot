@@ -693,6 +693,41 @@ async def complete_execution(
     return execution, proposal
 
 
+async def fail_execution_precheck(
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    execution_id: str,
+    reason: str,
+    executor: str | None = None,
+) -> tuple[ActionExecution, Proposal]:
+    """动作前检查失败：外部动作从未发起（外部效果确定为零）。
+
+    execution → pre_check_failed；账本收敛 completed（无外部效果）；
+    proposal → execution_failed；incident 转回调查路径。
+    """
+    execution, proposal = await _load_execution(session, execution_id)
+    execution.status = ActionExecutionStatus.PRE_CHECK_FAILED
+    execution.finished_at = datetime.now(UTC)
+    execution.result_detail = {"reason": reason}
+    await _settle_ledger(session, execution, IdempotencyState.COMPLETED, {"pre_check_failed": True})
+    require_proposal_transition(proposal.status, ProposalStatus.EXECUTION_FAILED)
+    proposal.status = ProposalStatus.EXECUTION_FAILED
+    await _return_incident_to_investigating(session, proposal)
+    await audit_service.record(
+        session,
+        actor_type=ActorType.ACTION_SERVICE.value,
+        actor_id=executor or "ops-action",
+        action="execution.pre_check_failed",
+        resource_type="action_execution",
+        resource_id=execution.id,
+        environment=proposal.environment,
+        detail={"proposal_id": proposal.id, "reason": reason},
+    )
+    await session.flush()
+    return execution, proposal
+
+
 async def mark_execution_unknown(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],

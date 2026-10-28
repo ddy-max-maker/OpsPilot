@@ -56,9 +56,10 @@ class ActionExecutor:
         self._docker = docker or DockerClient()
 
     async def precheck_container(self, container_name: str) -> dict[str, Any] | None:
-        """动作前检查：命名空间 allowlist + 容器实际存在且运行中。
+        """动作前检查：命名空间 allowlist + 容器实际存在（真实状态记录进审计）。
 
-        返回容器 inspect 数据（供审计/验证使用）；不通过时抛 PreCheckError。
+        不强制 Running：restart 对 stopped/paused 容器同样是合法受控操作
+        （语义 = 确保容器以全新状态运行）；容器真实状态随 inspect 记录。
         """
         if not is_registered_container_name(container_name):
             raise PreCheckError(f"container '{container_name}' is outside the registered namespace")
@@ -70,11 +71,6 @@ class ActionExecutor:
         info = await self._docker.inspect_container(container_name)
         if info is None:
             raise PreCheckError(f"container '{container_name}' does not exist on this host")
-        state = info.get("State") or {}
-        if not state.get("Running"):
-            raise PreCheckError(
-                f"container '{container_name}' is not running (status={state.get('Status')})"
-            )
         return info
 
     async def execute_restart_container(

@@ -10,13 +10,25 @@ from app.core.enums import AssetStatus, AssetType, Criticality, Environment
 
 
 class AssetEndpoints(BaseModel):
-    """已登记观测入口（均可空，供连接器使用；extra=forbid 防字段名拼写被静默忽略）。"""
+    """已登记观测入口（均可空，供连接器使用；extra=forbid 防字段名拼写被静默忽略）。
+
+    D5 新增：
+    - container_name：执行目标容器精确绑定（提案/执行侧与 allowlist 双重校验）；
+    - health_check：恢复验证探测配置（redis_ping: {host,port} / http_health: {url}），
+      仅 sandbox/staging 资产会进入执行链路（production 由提案层硬拒绝）。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     health_url: str | None = None
     metrics_ref: str | None = None
     logs_ref: str | None = None
+    container_name: str | None = Field(
+        default=None,
+        max_length=100,
+        pattern=r"^[a-z0-9][a-z0-9_.-]{0,99}$",
+    )
+    health_check: dict[str, object] | None = None
 
 
 class AssetCreateRequest(BaseModel):

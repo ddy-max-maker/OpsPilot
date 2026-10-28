@@ -130,6 +130,8 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://opspilot:opspilot@postgres:5432/opspilot
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      WEBHOOK_ALERTS_SECRET: ${WEBHOOK_ALERTS_SECRET:?WEBHOOK_ALERTS_SECRET is required}
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-opspilot}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
       ACTION_EXECUTOR_ID: ${ACTION_EXECUTOR_ID:-ops-action-1}
       ACTION_CONTAINER_NAME_PREFIX: ${ACTION_CONTAINER_NAME_PREFIX:-opspilot-demo-}

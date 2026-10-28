@@ -208,19 +208,12 @@ async def handle_execute_requested(
                     await session.commit()
             elif outcome.status == OutcomeStatus.PRE_CHECK_FAILED:
                 async with session_factory() as session:
-                    execution = await session.get(ActionExecution, execution_id)
-                    assert execution is not None
-                    execution.status = ActionExecutionStatus.PRE_CHECK_FAILED
-                    execution.finished_at = datetime.now(UTC)
-                    execution.result_detail = outcome.result_detail
-                    await audit_service.record(
+                    await approvals_service.fail_execution_precheck(
                         session,
-                        actor_type=ActorType.ACTION_SERVICE.value,
-                        actor_id=executor_id,
-                        action="execution.pre_check_failed",
-                        resource_type="action_execution",
-                        resource_id=execution_id,
-                        detail={"proposal_id": proposal_id},
+                        session_factory,
+                        execution_id=execution_id,
+                        reason=str(outcome.result_detail.get("reason", "pre-check failed")),
+                        executor=executor_id,
                     )
                     await session.commit()
             else:  # UNKNOWN：外部效果不可观测 → 禁止盲目重试

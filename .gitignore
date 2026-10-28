@@ -25,3 +25,7 @@ htmlcov/
 .idea/
 Thumbs.db
 .DS_Store
+
+# 本地演示（网络降级构建产物与 compose 覆盖）
+docker-compose.override.yml
+wheelhouse/
