@@ -98,8 +98,76 @@ HTTP_MANIFEST = ConnectorManifest(
     ),
 )
 
+PROM_MANIFEST = ConnectorManifest(
+    connector_id="prom-ro",
+    display_name="Prometheus 只读指标查询（受控模板）",
+    version="1.0.0",
+    capabilities=(
+        CapabilitySpec(
+            key="query_metrics",
+            description=(
+                "按授权资产执行受控 PromQL 模板查询（模板白名单 + 服务标签强制注入 + "
+                "时间范围/点数上限）；query 为实例配置 allowed_templates 中的模板键"
+            ),
+            source_type=EvidenceSourceType.METRIC,
+            collector="prometheus.query",
+            connector_code="prom-ro",
+            input_model="MetricsQueryInput",
+        ),
+    ),
+    asset_types=("service", "gateway", "database", "cache", "container", "host"),
+)
+
+OTEL_MANIFEST = ConnectorManifest(
+    connector_id="otel",
+    display_name="OpenTelemetry 链路只读查询（经既有可观测后端）",
+    version="1.0.0",
+    capabilities=(
+        CapabilitySpec(
+            key="query_traces",
+            description=(
+                "按授权资产查询链路（trace_id 精确查询或按服务+时间窗最近链路，"
+                "数量与时间范围受限）；返回摘要为不可信文本（脱敏）"
+            ),
+            source_type=EvidenceSourceType.TRACE,
+            collector="otel.query",
+            connector_code="otel",
+            input_model="TracesQueryInput",
+        ),
+    ),
+    asset_types=("service", "gateway", "database", "cache", "container", "host"),
+)
+
+MYSQL_MANIFEST = ConnectorManifest(
+    connector_id="mysql-ro",
+    display_name="MySQL 只读诊断（最小权限账号 + 预定义查询）",
+    version="1.0.0",
+    capabilities=(
+        CapabilitySpec(
+            key="read_mysql_diagnostics",
+            description=(
+                "连接状态/当前连接数/连接使用情况/慢查询摘要（全部为预定义只读查询，"
+                "无通用 SQL 执行能力）"
+            ),
+            source_type=EvidenceSourceType.INFRA,
+            collector="mysql.diagnostics",
+            connector_code="mysql-ro",
+            input_model="MySqlDiagnosticsInput",
+        ),
+    ),
+    asset_types=("database",),
+)
+
 BUILTIN_MANIFESTS: dict[str, ConnectorManifest] = {
-    m.connector_id: m for m in (REDIS_MANIFEST, DOCKER_MANIFEST, HTTP_MANIFEST)
+    m.connector_id: m
+    for m in (
+        REDIS_MANIFEST,
+        DOCKER_MANIFEST,
+        HTTP_MANIFEST,
+        PROM_MANIFEST,
+        OTEL_MANIFEST,
+        MYSQL_MANIFEST,
+    )
 }
 
 

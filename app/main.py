@@ -25,6 +25,7 @@ from app.core.db import dispose_engine, get_session_factory, init_engine
 from app.core.errors import ApiError, ErrorCode
 from app.core.responses import Envelope, ErrorBody, current_request_id, set_request_id
 from app.domains.auth import service as auth_service
+from app.domains.integrations import service as integrations_service
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -40,6 +41,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     factory = get_session_factory()
     async with factory() as session:
         await auth_service.bootstrap(session, settings)
+        # D3：Capability Registry 启动同步（内置 manifest 兼容校验后落库；
+        # 不兼容的连接器拒绝注册并记录日志）
+        rejected = await integrations_service.sync_capability_manifests(session)
+    if rejected:
+        logger.warning("capability manifests rejected (incompatible): %s", rejected)
     logger.info("OpsPilot Next started (database ready, bootstrap complete)")
     yield
     await dispose_engine()

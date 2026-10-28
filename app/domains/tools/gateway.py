@@ -11,12 +11,14 @@
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import UTC, datetime
 from typing import Any, TypeVar, cast
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
@@ -30,13 +32,20 @@ from app.core.ids import new_id
 from app.domains.audit import service as audit_service
 from app.domains.tools import connectors
 from app.domains.tools.connectors.base import ConnectorResult
-from app.domains.tools.context import RunEventWriter, RunToolContext, ToolBudgetExhausted
+from app.domains.tools.context import (
+    LEASE_GUARD_SQL,
+    LeaseLostError,
+    RunEventWriter,
+    RunToolContext,
+    ToolBudgetExhausted,
+)
 from app.domains.tools.manifests import (
     ALL_CAPABILITY_KEYS,
     BUILTIN_MANIFESTS,
     CapabilitySpec,
 )
 from app.domains.tools.redaction import redact_payload, truncate_text
+from app.domains.tools.registry import ConnectorResolutionError, ResolvedInstance
 from app.models import Asset, Evidence
 
 # ---- 工具输入 Schema（Pydantic 校验；additionalProperties=false 语义）----
@@ -66,16 +75,38 @@ class ContainerLogsInput(AssetScopedInput):
     tail_limit: int = Field(default=100, ge=1, le=500)
 
 
+class MetricsQueryInput(AssetScopedInput):
+    """受控指标查询：template 必须是实例配置 allowed_templates 的键（非原始 PromQL）。"""
+
+    template: str = Field(min_length=1, max_length=100)
+    time_range: dict[str, str] | None = None
+
+
+class TracesQueryInput(AssetScopedInput):
+    trace_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8,64}$")
+    time_range: dict[str, str] | None = None
+
+
+class MySqlDiagnosticsInput(AssetScopedInput):
+    pass
+
+
 INPUT_MODELS: dict[str, type[BaseModel]] = {
     "get_service_health": ServiceHealthInput,
     "check_redis_health": RedisHealthInput,
     "get_container_status": ContainerStatusInput,
     "read_container_logs": ContainerLogsInput,
+    "query_metrics": MetricsQueryInput,
+    "query_traces": TracesQueryInput,
+    "read_mysql_diagnostics": MySqlDiagnosticsInput,
 }
 
 
 class ToolGateway:
     """按 manifest 生成受控只读工具；每个 run 绑定独立上下文。"""
+
+    # D3 TOCTOU 修复：同事务租约护栏（行锁持有至提交；失效 → rowcount=0）
+    _LEASE_GUARD_SQL = LEASE_GUARD_SQL
 
     def __init__(
         self,
@@ -199,9 +230,20 @@ class ToolGateway:
                 "params": params.model_dump(),
             },
         )
-        result = await self._invoke_connector(ctx, spec, asset, params)
+        resolved: ResolvedInstance | None
+        try:
+            resolved = self._resolve_instance(ctx, spec.connector_code, asset)
+            result = await self._invoke_connector(ctx, spec, asset, params, resolved)
+        except _InstanceResolutionFailure as exc:
+            # 多实例未绑定/未配置 → 明确失败的 unavailable 证据（不猜测凭据）
+            resolved = None
+            result = ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={"reason": exc.message},
+                error_code=exc.code,
+            )
         evidence_id, evidence_summary = await self._persist_evidence(
-            ctx, spec, asset, result, manifest.result_max_bytes
+            ctx, spec, asset, result, manifest.result_max_bytes, resolved
         )
         latency_ms = int((time.monotonic() - started) * 1000)
         await events.append(
@@ -232,20 +274,41 @@ class ToolGateway:
 
     # ---- 连接器分发（仅白名单 capability）----
 
+    def _resolve_instance(
+        self, ctx: RunToolContext, connector_code: str, asset: Asset
+    ) -> ResolvedInstance | None:
+        """按（授权资产, 连接器类型）解析实例（D3：修复同类多实例覆盖串用）。
+
+        instance_map（Registry 解析表）优先；未提供时回退 D2 的按类型配置
+        （兼容旧调用方/测试）。解析失败映射为 unavailable Evidence。
+        """
+        if ctx.instance_map is not None:
+            try:
+                return cast(ResolvedInstance, ctx.instance_map.resolve(connector_code, asset.id))
+            except ConnectorResolutionError as exc:
+                raise _InstanceResolutionFailure(exc.code, str(exc)) from exc
+        config = ctx.connector_configs.get(connector_code)
+        if config is None:
+            return None
+        return ResolvedInstance(
+            instance_id=f"type:{connector_code}", connector_code=connector_code, config=config
+        )
+
     async def _invoke_connector(
         self,
         ctx: RunToolContext,
         spec: CapabilitySpec,
         asset: Asset,
         params: BaseModel,
+        resolved: ResolvedInstance | None,
     ) -> ConnectorResult:
-        config = ctx.connector_configs.get(spec.connector_code)
-        if config is None:
+        if resolved is None:
             return ConnectorResult(
                 status=EvidenceStatus.UNAVAILABLE,
                 payload={"reason": "connector instance not configured"},
                 error_code="CONNECTOR_NOT_CONFIGURED",
             )
+        config = resolved.config
         timeout = float(config.get("timeout_seconds", self._settings.connector_timeout_seconds))
         if spec.key == "get_service_health":
             health_url = (asset.endpoints or {}).get("health_url")
@@ -285,10 +348,98 @@ class ToolGateway:
                 tail_limit=logs_params.tail_limit,
                 timeout_seconds=timeout,
             )
+        if spec.key == "query_metrics":
+            mq: MetricsQueryInput = params  # type: ignore[assignment]
+            return await self._query_metrics(asset, resolved, mq, timeout)
+        if spec.key == "query_traces":
+            tq: TracesQueryInput = params  # type: ignore[assignment]
+            return await self._query_traces(asset, resolved, tq, timeout)
+        if spec.key == "read_mysql_diagnostics":
+            return await self._mysql_diagnostics(asset, resolved, timeout)
         return ConnectorResult(
             status=EvidenceStatus.UNAVAILABLE,
             payload={"reason": "capability not implemented"},
             error_code="NOT_IMPLEMENTED",
+        )
+
+    # ---- D3 可观测性 / MySQL 受控查询 ----
+
+    async def _query_metrics(
+        self, asset: Asset, resolved: ResolvedInstance, mq: MetricsQueryInput, timeout: float
+    ) -> ConnectorResult:
+        """受控 PromQL：模板白名单 + 服务标签强制注入（不可查询其他服务）。"""
+        base_url = str(resolved.config.get("base_url", "")).strip()
+        if not base_url:
+            return ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={"reason": "prometheus base_url not configured"},
+                error_code="PROM_NOT_CONFIGURED",
+            )
+        templates = dict(resolved.config.get("allowed_templates") or {})
+        template = templates.get(mq.template)
+        if template is None:
+            return ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={
+                    "reason": f"metric template '{mq.template}' not in instance allowlist",
+                    "allowed": sorted(templates),
+                },
+                error_code="METRIC_TEMPLATE_NOT_ALLOWED",
+            )
+        service_label = str(resolved.config.get("service") or asset.name)
+        query = template.replace("{service}", service_label)
+        return await connectors.prometheus.query_metrics(
+            base_url=base_url,
+            query=query,
+            time_range=mq.time_range,
+            timeout_seconds=timeout,
+        )
+
+    async def _query_traces(
+        self, asset: Asset, resolved: ResolvedInstance, tq: TracesQueryInput, timeout: float
+    ) -> ConnectorResult:
+        base_url = str(resolved.config.get("base_url", "")).strip()
+        if not base_url:
+            return ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={"reason": "tracing backend base_url not configured"},
+                error_code="OTEL_NOT_CONFIGURED",
+            )
+        service_label = str(resolved.config.get("service") or asset.name)
+        return await connectors.jaeger.query_traces(
+            base_url=base_url,
+            service=service_label,
+            trace_id=tq.trace_id,
+            time_range=tq.time_range,
+            timeout_seconds=timeout,
+        )
+
+    async def _mysql_diagnostics(
+        self, asset: Asset, resolved: ResolvedInstance, timeout: float
+    ) -> ConnectorResult:
+        """MySQL 只读诊断：预定义查询 + 最小权限账号；密码经环境变量解析。"""
+        host = str(resolved.config.get("host", "")).strip()
+        if not host:
+            return ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={"reason": "mysql host not configured"},
+                error_code="MYSQL_NOT_CONFIGURED",
+            )
+        password_env = str(resolved.config.get("password_env", "")).strip()
+        password = os.environ.get(password_env, "") if password_env else ""
+        if not password:
+            return ConnectorResult(
+                status=EvidenceStatus.UNAVAILABLE,
+                payload={"reason": "mysql password secret not configured"},
+                error_code="SECRET_NOT_CONFIGURED",
+            )
+        return await connectors.mysql_diagnostics.read_mysql_diagnostics(
+            host=host,
+            port=int(resolved.config.get("port", 3306)),
+            user=str(resolved.config.get("user", "")),
+            password=password,
+            database=resolved.config.get("database") and str(resolved.config["database"]) or None,
+            timeout_seconds=timeout,
         )
 
     # ---- Evidence 归一化与持久化（只追加）----
@@ -300,6 +451,7 @@ class ToolGateway:
         asset: Asset,
         result: ConnectorResult,
         result_max_bytes: int,
+        resolved: ResolvedInstance | None = None,
     ) -> tuple[str, str]:
         summary_source = _build_summary(spec, result)
         summary, summary_truncated = truncate_text(
@@ -310,9 +462,27 @@ class ToolGateway:
             min(self._settings.evidence_payload_max_bytes, result_max_bytes),
         )
         evidence_id = new_id("ev_")
-        # D2.1 fencing：旧 Worker 失去租约后禁止证据写入
-        await ctx.assert_lease()
+        correlation = {"service": asset.name}
+        if resolved is not None:
+            # 审计追溯：本次取证使用了哪个连接器实例（多实例隔离证据）
+            correlation["instance_id"] = resolved.instance_id
         async with self._session_factory() as session:
+            # D3 TOCTOU 修复：租约校验与写入同一事务（行锁持有至提交，
+            # 接管方在 commit 前无法完成 claim，杜绝"校验后失效仍写入"窗口）
+            if ctx.lease_fence is not None:
+                guard = cast(
+                    "CursorResult[Any]",
+                    await session.execute(
+                        self._LEASE_GUARD_SQL,
+                        {
+                            "run_id": ctx.run_id,
+                            "fence_token": ctx.lease_fence.fence_token,
+                            "worker_id": ctx.lease_fence.worker_id,
+                        },
+                    ),
+                )
+                if guard.rowcount == 0:
+                    raise LeaseLostError(f"run {ctx.run_id} lease lost before evidence write")
             session.add(
                 Evidence(
                     id=evidence_id,
@@ -325,7 +495,7 @@ class ToolGateway:
                     status=result.status.value,
                     data_ref=data_ref,
                     summary_redacted=summary,
-                    correlation={"service": asset.name},
+                    correlation=correlation,
                     error_code=result.error_code,
                     truncated=summary_truncated or payload_truncated,
                 )
@@ -360,6 +530,15 @@ class ToolGateway:
                 },
             )
             await session.commit()
+
+
+class _InstanceResolutionFailure(Exception):
+    """实例解析失败 → 映射为 unavailable Evidence（携带稳定 error_code）。"""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 def _build_summary(spec: CapabilitySpec, result: ConnectorResult) -> str:

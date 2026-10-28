@@ -93,6 +93,8 @@ def build_chat_model(settings: Settings) -> ModelHandle:
             "api_key": api_key,
             "timeout": 120,
             "max_retries": 1,
+            # DeepSeek 缺省输出上限 4K——诊断报告 JSON 会被截断，显式放宽
+            "max_tokens": 8192,
         }
         if settings.agent_api_base:
             kwargs["api_base"] = settings.agent_api_base

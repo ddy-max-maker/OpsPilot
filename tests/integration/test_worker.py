@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -37,6 +38,7 @@ from app.models import (
     User,
 )
 from app.worker import claim
+from app.worker.loop import AgentWorker
 
 
 async def _make_runtime(
@@ -510,6 +512,26 @@ def test_gateway_tool_surface_readonly(db_session_factory, worker_settings) -> N
         "check_redis_health",
         "get_container_status",
         "read_container_logs",
+        # D3：可观测性与 MySQL 只读诊断能力面
+        "query_metrics",
+        "query_traces",
+        "read_mysql_diagnostics",
     }
     assert "execute" not in names
     assert "task" not in names
+
+
+async def test_worker_startup_failure_terminates_visibly(clean_db) -> None:
+    """D3 回归：Provider 配置错误时 run_forever 必须可见终止，而不是悬挂进程。
+
+    此前 startup() 抛 ProviderNotConfigured 后异常被 asyncio.run 清理阶段吞掉，
+    进程假活（容器 Up 但永不认领）。修复后 run_forever 捕获、记录并正常返回。
+    """
+    settings = Settings(
+        agent_provider="deepseek",
+        agent_model_name="deepseek-chat",
+        agent_api_key_env="_NONEXISTENT_KEY_VAR_",
+    )
+    worker = AgentWorker(settings)
+    # 正常返回（而非 TimeoutError）= 未悬挂；异常已在 startup 内被记录
+    await asyncio.wait_for(worker.run_forever(), timeout=30)

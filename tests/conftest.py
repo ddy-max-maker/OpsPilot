@@ -60,7 +60,8 @@ ALL_TABLES = (
     "users, roles, user_roles, asset_access_policies, assets, asset_edges, "
     "incidents, alerts, audit_events, api_idempotency_keys, outbox_events, "
     "investigation_runs, run_events, evidence, hypotheses, diagnostic_reports, "
-    "connector_types, connector_instances, secret_refs"
+    "connector_types, connector_instances, secret_refs, "
+    "capability_manifests, capability_test_runs, asset_observability_bindings"
 )
 
 

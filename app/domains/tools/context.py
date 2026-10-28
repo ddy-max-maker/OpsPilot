@@ -12,15 +12,23 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, select, text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import TextClause
 
 from app.core.enums import RunEventType
 from app.models import RunEvent
 
 CancelChecker = Callable[[], Awaitable[bool]]
+
+# D3 TOCTOU 修复：同事务租约护栏 SQL（run_events / evidence / 报告写入共用）
+LEASE_GUARD_SQL: TextClause = text(
+    "UPDATE investigation_runs SET updated_at = updated_at "
+    "WHERE id = :run_id AND fence_token = :fence_token AND lease_owner = :worker_id"
+)
 
 
 class ToolBudgetExhausted(RuntimeError):
@@ -116,6 +124,8 @@ class RunToolContext:
     connector_configs: dict[str, dict[str, Any]]  # connector_code -> config
     all_assets: bool = False
     rate_state: dict[str, float] = field(default_factory=dict)
+    # D3：Capability Registry 实例解析表（按授权资产解析，修复同类多实例覆盖）
+    instance_map: Any | None = None
     # D2.1 fencing：旧 Worker 失去租约后，Gateway 证据落库前校验（None = 测试直连）
     lease_fence: LeaseFence | None = None
     _seq: int = 0
@@ -197,11 +207,27 @@ class RunEventWriter:
         payload: dict[str, Any] | None = None,
     ) -> int:
         if self._lease_fence is not None:
+            # 快速失败预检（权威护栏是下方同事务 GUARD）
             await self._lease_fence.assert_valid()
         async with self._seq_lock:
             self._seq += 1
             seq = self._seq
         async with self._session_factory() as session:
+            # D3 TOCTOU 修复：租约校验与写入同一事务（行锁持有至提交）
+            if self._lease_fence is not None:
+                guard = cast(
+                    "CursorResult[Any]",
+                    await session.execute(
+                        LEASE_GUARD_SQL,
+                        {
+                            "run_id": self._run_id,
+                            "fence_token": self._lease_fence.fence_token,
+                            "worker_id": self._lease_fence.worker_id,
+                        },
+                    ),
+                )
+                if guard.rowcount == 0:
+                    raise LeaseLostError(f"run {self._run_id} lease lost before event write")
             session.add(
                 RunEvent(run_id=self._run_id, seq=seq, type=event_type.value, payload=payload)
             )

@@ -1,4 +1,4 @@
-# OpsPilot Next D2 demo fault injection/recovery (real container operations, no mocks)
+# OpsPilot Next D2/D3 demo fault injection/recovery (real container/service operations, no mocks)
 #
 # Usage (PowerShell on host with docker compose):
 #   .\scripts\demo\faults.ps1 -Action inject  -Scenario S1   # Redis unreachable
@@ -7,6 +7,14 @@
 #   .\scripts\demo\faults.ps1 -Action recover -Scenario S2
 #   .\scripts\demo\faults.ps1 -Action inject  -Scenario S4   # gateway upstream down (observed 504)
 #   .\scripts\demo\faults.ps1 -Action recover -Scenario S4
+#   .\scripts\demo\faults.ps1 -Action inject  -Scenario J1   # Java: business endpoint latency (real sleep)
+#   .\scripts\demo\faults.ps1 -Action recover -Scenario J1
+#   .\scripts\demo\faults.ps1 -Action inject  -Scenario J2   # Java: 500 error responses
+#   .\scripts\demo\faults.ps1 -Action recover -Scenario J2
+#   .\scripts\demo\faults.ps1 -Action inject  -Scenario J3   # Java: dependency down -> 503
+#   .\scripts\demo\faults.ps1 -Action recover -Scenario J3
+#   .\scripts\demo\faults.ps1 -Action inject  -Scenario M1   # MySQL: connection load + slow queries
+#   .\scripts\demo\faults.ps1 -Action recover -Scenario M1
 #   .\scripts\demo\faults.ps1 -Action status
 param(
     [Parameter(Mandatory = $false)]
@@ -14,7 +22,7 @@ param(
     [string]$Action,
 
     [Parameter(Mandatory = $false)]
-    [ValidateSet("S1", "S2", "S4")]
+    [ValidateSet("S1", "S2", "S4", "J1", "J2", "J3", "M1")]
     [string]$Scenario
 )
 
@@ -74,6 +82,38 @@ switch ($Action) {
                 Start-Sleep -Seconds 1
                 Write-Host "[S4] done. GET http://localhost:8081/health should return 5xx (observed 504)."
             }
+            "J1" {
+                Write-Host "[J1] injecting: Java business endpoints sleep 8s (real latency) + traffic loop..."
+                Invoke-RestMethod -Method Post -Uri "http://localhost:8082/__faults" `
+                    -ContentType "application/json" -Body '{"delayMs": 8000, "errorRate": 0, "dependencyUrl": ""}' | Out-Null
+                docker exec -d opspilot-demo-java sh -c 'while true; do wget -qO- http://localhost:8080/api/orders/$((RANDOM % 10)) >/dev/null 2>&1; sleep 1; done # TRAFFIC'
+                Start-Sleep -Seconds 3
+                Write-Host "[J1] done. /api/slow takes ~8s; traffic loop generating real requests."
+            }
+            "J2" {
+                Write-Host "[J2] injecting: Java /api/orders returns real 500s (error_rate=100) + traffic loop..."
+                Invoke-RestMethod -Method Post -Uri "http://localhost:8082/__faults" `
+                    -ContentType "application/json" -Body '{"delayMs": 0, "errorRate": 100, "dependencyUrl": ""}' | Out-Null
+                docker exec -d opspilot-demo-java sh -c 'while true; do wget -qO- http://localhost:8080/api/orders/$((RANDOM % 10)) >/dev/null 2>&1; sleep 1; done # TRAFFIC'
+                Start-Sleep -Seconds 8
+                Write-Host "[J2] done. /api/orders returns 500 continuously; metrics/logs capture real failures."
+            }
+            "J3" {
+                Write-Host "[J3] injecting: Java dependency = demo-app, stop demo-app (real 503) + traffic loop..."
+                Invoke-RestMethod -Method Post -Uri "http://localhost:8082/__faults" `
+                    -ContentType "application/json" -Body '{"delayMs": 0, "errorRate": 0, "dependencyUrl": "http://demo-app:8080/health"}' | Out-Null
+                docker stop opspilot-demo-app | Out-Null
+                docker exec -d opspilot-demo-java sh -c 'while true; do wget -qO- http://localhost:8080/api/orders/$((RANDOM % 10)) >/dev/null 2>&1; sleep 2; done # TRAFFIC'
+                Start-Sleep -Seconds 8
+                Write-Host "[J3] done. /api/orders returns 503 dependency_unavailable continuously."
+            }
+            "M1" {
+                Write-Host "[M1] injecting: MySQL connection load (40 sleeping sessions) + slow digest queries..."
+                docker cp demo/mysql_load.sh opspilot-demo-mysql:/tmp/mysql_load.sh | Out-Null
+                docker exec -d opspilot-demo-mysql sh /tmp/mysql_load.sh inject 40
+                Start-Sleep -Seconds 6
+                Write-Host "[M1] done. Threads_connected ~ 40+, slow digest populated."
+            }
         }
         Write-Host ""
         Invoke-Status
@@ -91,6 +131,29 @@ switch ($Action) {
             "S4" {
                 Write-Host "[S4] recovering: start demo-app..."
                 docker start opspilot-demo-app | Out-Null
+            }
+            "J1" {
+                Write-Host "[J1] recovering: reset Java fault config, stop traffic loop..."
+                docker exec opspilot-demo-java sh -c "pkill -f TRAFFIC" 2>$null | Out-Null
+                Invoke-RestMethod -Method Post -Uri "http://localhost:8082/__faults" `
+                    -ContentType "application/json" -Body '{"delayMs": 0}' | Out-Null
+            }
+            "J2" {
+                Write-Host "[J2] recovering: reset Java fault config, stop traffic loop..."
+                docker exec opspilot-demo-java sh -c "pkill -f TRAFFIC" 2>$null | Out-Null
+                Invoke-RestMethod -Method Post -Uri "http://localhost:8082/__faults" `
+                    -ContentType "application/json" -Body '{"errorRate": 0}' | Out-Null
+            }
+            "J3" {
+                Write-Host "[J3] recovering: start demo-app, reset dependency, stop traffic loop..."
+                docker start opspilot-demo-app | Out-Null
+                docker exec opspilot-demo-java sh -c "pkill -f TRAFFIC" 2>$null | Out-Null
+                Invoke-RestMethod -Method Post -Uri "http://localhost:8082/__faults" `
+                    -ContentType "application/json" -Body '{"dependencyUrl": ""}' | Out-Null
+            }
+            "M1" {
+                Write-Host "[M1] recovering: kill MySQL sleeping sessions..."
+                docker exec opspilot-demo-mysql sh /tmp/mysql_load.sh recover 2>$null | Out-Null
             }
         }
         Start-Sleep -Seconds 2

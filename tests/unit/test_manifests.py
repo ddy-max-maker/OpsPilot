@@ -40,4 +40,8 @@ def test_capability_keys_unique() -> None:
         "get_container_status",
         "read_container_logs",
         "check_redis_health",
+        # D3：可观测性与 MySQL 只读诊断
+        "query_metrics",
+        "query_traces",
+        "read_mysql_diagnostics",
     }

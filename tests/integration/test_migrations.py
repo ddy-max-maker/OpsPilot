@@ -69,11 +69,14 @@ def test_alembic_upgrade_and_downgrade_cycle() -> None:
             "connector_types",
             "connector_instances",
             "secret_refs",
+            "capability_manifests",
+            "capability_test_runs",
+            "asset_observability_bindings",
             "incidents",
             "alerts",
         ):
             assert expected in tables, expected
-        assert version is not None and version[0] == "0002_d2_diagnosis"
+        assert version is not None and version[0] == "0003_d3_registry"
         assert schemas == {"langgraph"}  # ADR-5
 
         # head → base：可完整回滚

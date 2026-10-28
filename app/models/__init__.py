@@ -12,6 +12,7 @@ from app.models.connector import ConnectorInstance, ConnectorType, SecretRef
 from app.models.evidence import DiagnosticReport, Evidence, Hypothesis
 from app.models.incident import Incident
 from app.models.outbox import ApiIdempotencyKey, OutboxEvent
+from app.models.registry import AssetObservabilityBinding, CapabilityManifest, CapabilityTestRun
 from app.models.run import InvestigationRun, RunEvent
 from app.models.user import SYSTEM_USER_ID, AssetAccessPolicy, Role, User, UserRole
 
@@ -22,8 +23,11 @@ __all__ = [
     "Asset",
     "AssetAccessPolicy",
     "AssetEdge",
+    "AssetObservabilityBinding",
     "AuditEvent",
     "Base",
+    "CapabilityManifest",
+    "CapabilityTestRun",
     "ConnectorInstance",
     "ConnectorType",
     "DiagnosticReport",

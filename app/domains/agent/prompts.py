@@ -26,6 +26,10 @@ DIAGNOSIS_SYSTEM_PROMPT = textwrap.dedent(
        补充的信息清单；禁止强行下结论。
     6. 知识检索（历史事故/Runbook）在当前版本不可用；不要引用历史知识作为根因证据。
     7. 你的所有输出都会被审计；原始日志等大内容只在工具返回的摘要中呈现。
+    8. 证据语义（重要）：成功接收到目标服务的错误响应（如 HTTP 502/504、5xx）
+       是有效的故障观测，可引用为故障现象与直接原因；但它只证明症状，不足以
+       证明具体上游根因——除非有上游侧（依赖方）证据支持。连接器不可用/超时
+       是采集问题，不等于业务根因。
     """
 ).strip()
 
@@ -50,8 +54,11 @@ REPORT_FORMAT_PROMPT = textwrap.dedent(
       },
       "next_manual_steps": ["建议的人工处置方向（不执行）"]
     }
-    规则：supported 级假设必须至少引用 1 条实时证据；unknown.is_unknown=true 时
-    不得存在 supported 假设。
+    规则：supported 级假设必须至少引用 1 条实时证据（healthy 或真实错误响应
+    观测）；仅有采集失败/超时证据的假设必须是 insufficient_data；
+    unknown.is_unknown=true 时不得存在 supported 假设；
+    网关错误响应（502/504）只能支撑"上游不可达/超时"级别的直接原因结论，
+    不得仅凭其判定具体上游根因。
     """
 ).strip()
 
@@ -67,6 +74,7 @@ def build_run_task_prompt(
     asset_type: str,
     asset_endpoints: dict[str, object] | None,
     authorized_assets: list[str],
+    metric_templates: list[str] | None = None,
 ) -> str:
     """组装单次 run 的用户任务消息（上下文来自 DB，不依赖模型记忆）。"""
     endpoints = asset_endpoints or {}
@@ -77,8 +85,15 @@ def build_run_task_prompt(
         f"- 已登记观测端点：health_url={endpoints.get('health_url') or '未登记'}",
         f"- 描述：{incident_description or '（无）'}",
         f"- 授权资产集合大小：{len(authorized_assets)}（含主资产）",
-        "",
-        "请开始只读诊断：先规划要采集哪些证据，逐一调用工具取证，",
-        "再给出假设与最终 JSON 报告。",
     ]
+    if metric_templates:
+        # D3：指标模板白名单（实例绑定提供；query_metrics 的 template 只能取这些键）
+        lines.append(f"- 已授权指标查询模板：{', '.join(metric_templates)}")
+    lines.extend(
+        [
+            "",
+            "请开始只读诊断：先规划要采集哪些证据，逐一调用工具取证，",
+            "再给出假设与最终 JSON 报告。",
+        ]
+    )
     return "\n".join(lines)

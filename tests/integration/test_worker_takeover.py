@@ -260,7 +260,8 @@ async def test_report_version_increments_never_overwrites(
 async def test_supported_hypothesis_requires_ok_evidence(
     worker_runtime, db_session_factory, db_engine
 ) -> None:
-    """任务四：仅由采集失败证据（error/unavailable）支撑的假设降级为 insufficient_data。"""
+    """任务四/D3：仅由采集失败证据（indeterminate/unavailable）支撑的假设降级；
+    成功采集到目标错误响应（HTTP_504，fault_observed）是有效故障观测。"""
     from app.core.ids import new_id
     from app.models import Incident
 
@@ -274,13 +275,13 @@ async def test_supported_hypothesis_requires_ok_evidence(
             asset_id=asset.id,
             environment="sandbox",
             source_type="health",
-            collector="http.health_check",
+            collector="redis.health",
             observed_at=datetime.now(UTC),
             status="error",
-            data_ref={"redacted": True, "content": {}},
-            summary_redacted="http.health_check error (HTTP_504)",
+            data_ref={"redacted": True, "content": {"error_type": "ConnectionError"}},
+            summary_redacted="redis.health error (REDIS_ERROR): ConnectionError",
             correlation={"service": asset.name},
-            error_code="HTTP_504",
+            error_code="REDIS_ERROR",
             truncated=False,
             schema_version="1",
         )
@@ -300,9 +301,25 @@ async def test_supported_hypothesis_requires_ok_evidence(
             truncated=False,
             schema_version="1",
         )
-        session.add_all([ev_error, ev_ok])
+        ev_504 = Evidence(
+            id=new_id("ev_"),
+            run_id=run.id,
+            asset_id=asset.id,
+            environment="sandbox",
+            source_type="health",
+            collector="http.health_check",
+            observed_at=datetime.now(UTC),
+            status="error",
+            data_ref={"redacted": True, "content": {"http_status": 504}},
+            summary_redacted="http.health_check error (HTTP_504)",
+            correlation={"service": asset.name},
+            error_code="HTTP_504",
+            truncated=False,
+            schema_version="1",
+        )
+        session.add_all([ev_error, ev_ok, ev_504])
         await session.commit()
-        err_id, ok_id = ev_error.id, ev_ok.id
+        err_id, ok_id, id504 = ev_error.id, ev_ok.id, ev_504.id
 
     execution = await _execute(worker_runtime, db_session_factory, run.id)
     report_data: dict[str, Any] = {
@@ -310,6 +327,7 @@ async def test_supported_hypothesis_requires_ok_evidence(
         "key_findings": [
             {"finding": "失败证据不构成根因", "evidence_ids": [err_id, "ev_forged"]},
             {"finding": "正常取证支持结论", "evidence_ids": [ok_id]},
+            {"finding": "错误响应是有效故障观测", "evidence_ids": [id504]},
         ],
         "hypotheses": [
             {
@@ -326,6 +344,15 @@ async def test_supported_hypothesis_requires_ok_evidence(
                 "statement": "有正常取证的假设",
                 "status": "supported",
                 "supporting_evidence_ids": [ok_id],
+                "contradicting_evidence_ids": [],
+                "missing_information": [],
+                "confidence": "medium",
+            },
+            {
+                "rank": 3,
+                "statement": "服务返回 504（有效故障观测，直接原因级结论）",
+                "status": "supported",
+                "supporting_evidence_ids": [id504],
                 "contradicting_evidence_ids": [],
                 "missing_information": [],
                 "confidence": "medium",
@@ -353,13 +380,99 @@ async def test_supported_hypothesis_requires_ok_evidence(
         assert by_rank[1].status == "insufficient_data"
         assert any("采集失败" in m for m in by_rank[1].missing_information)
         assert by_rank[2].status == "supported"
+        # D3：成功采集到目标错误响应（HTTP_504 → fault_observed）仍是有效支撑
+        assert by_rank[3].status == "supported"
         report = (
             await session.execute(select(DiagnosticReport).where(DiagnosticReport.run_id == run.id))
         ).scalar_one()
         # 伪造引用被过滤：不存在/越权的 evidence id 不出现在报告与结论引用中
-        assert set(report.evidence_refs or []) <= {err_id, ok_id}
+        assert set(report.evidence_refs or []) <= {err_id, ok_id, id504}
         for finding in report.conclusion["key_findings"]:
-            assert set(finding["evidence_ids"]) <= {err_id, ok_id}
+            assert set(finding["evidence_ids"]) <= {err_id, ok_id, id504}
+
+
+async def test_toctou_write_interleaves_with_takeover(
+    worker_runtime, db_session_factory, db_engine
+) -> None:
+    """D3 任务六：并发交错下的原子性（不只是接管完成后的拒绝）。
+
+    场景：旧 Worker 的护栏 UPDATE 持有 run 行锁期间（写事务未提交），
+    接管方的 SKIP LOCKED claim 无法选中该行 → 不可能产生"校验通过后
+    被接管仍提交成功"的窗口；接管完成后，旧 Worker 的原子护栏
+    rowcount=0 → 立即拒绝；崩溃（回滚）不留半截写入。
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.domains.tools.context import LEASE_GUARD_SQL
+
+    run = await _seed_run(db_session_factory, db_engine)
+    w1 = await claim.claim_next_run(db_session_factory, worker_id="w1", lease_ttl_seconds=60)
+    assert w1 is not None
+    fence_w1 = _fence(db_session_factory, run.id, int(w1["fence_token"]), "w1")
+    # 模拟旧 Worker 停滞：租约已过期（新 Worker 可认领）
+    await _force_lease_expiry(db_session_factory, run.id)
+
+    # ---- 旧 Worker 开启写事务（护栏 UPDATE 持行锁，未提交）----
+    async with db_session_factory() as stale_session, stale_session.begin():
+        guard = await stale_session.execute(
+            LEASE_GUARD_SQL,
+            {
+                "run_id": run.id,
+                "fence_token": fence_w1.fence_token,
+                "worker_id": "w1",
+            },
+        )
+        assert guard.rowcount == 1  # 护栏通过（此刻租约仍然有效）
+        # 并发接管尝试：行被锁 → SKIP LOCKED 跳过 → 无法认领
+        got = await claim.claim_next_run(db_session_factory, worker_id="w2", lease_ttl_seconds=60)
+        assert got is None, "接管方不得在旧 Worker 写事务提交前接管"
+        # 写入 run_event（尚未提交）
+        stale_session.add(RunEvent(run_id=run.id, seq=1, type=RunEventType.TOOL_CALLED, payload={}))
+        # ---- 事务提交：事件合法落库（写时租约仍有效）----
+    async with db_session_factory() as session:
+        count = int(
+            await session.scalar(
+                select(func.count()).select_from(RunEvent).where(RunEvent.run_id == run.id)
+            )
+        )
+        assert count == 1
+
+    # ---- 接管（fence+1）----
+    w2 = await claim.claim_next_run(db_session_factory, worker_id="w2", lease_ttl_seconds=60)
+    assert w2 is not None and w2["fence_token"] == 2
+
+    # ---- 旧 Worker 复活后的写入：原子护栏拒绝 ----
+    async with db_session_factory() as session:
+        late_guard = await session.execute(
+            LEASE_GUARD_SQL,
+            {"run_id": run.id, "fence_token": 1, "worker_id": "w1"},
+        )
+        assert late_guard.rowcount == 0  # fence 已失配
+    with pytest.raises(LeaseLostError):
+        stale_writer = await RunEventWriter.create(db_session_factory, run.id, lease_fence=fence_w1)
+        await stale_writer.append(RunEventType.TOOL_RETURNED, {"late": True})
+
+    # ---- 崩溃语义：护栏通过但事务回滚 → 不留半截写入 ----
+    try:
+        async with db_session_factory() as crash_session, crash_session.begin():
+            g = await crash_session.execute(
+                LEASE_GUARD_SQL,
+                {"run_id": run.id, "fence_token": 2, "worker_id": "w2"},
+            )
+            assert g.rowcount == 1
+            crash_session.add(RunEvent(run_id=run.id, seq=99, type=RunEventType.ERROR, payload={}))
+            raise RuntimeError("simulated crash mid-transaction")
+    except RuntimeError:
+        pass
+    async with db_session_factory() as session:
+        seqs = list(
+            (
+                await session.execute(
+                    sa_select(RunEvent.seq).where(RunEvent.run_id == run.id).order_by(RunEvent.seq)
+                )
+            ).scalars()
+        )
+        assert seqs == [1]  # 崩溃事务整体回滚，业务状态一致
 
 
 async def test_worker_settings_shape(worker_settings: Settings) -> None:

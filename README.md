@@ -2,9 +2,10 @@
 
 企业级智能运维故障诊断与受控恢复平台（全新实现，不迁移旧 OpsPilot 代码）。
 
-当前仓库状态：**D2 完成**（DeepAgents 智能故障诊断：AgentRuntime + Tool Gateway +
-ops-worker + 真实故障演示环境 + 诊断报告）。D1-A/D1-B 能力全部保留；
-不含 RAG / RabbitMQ / MCP / Action Service / 自动修复（见 docs/IMPLEMENTATION_PLAN.md 的 D3 及后续阶段）。
+当前仓库状态：**D3 完成**（Capability Registry + 可观测性标准化接入 +
+Java+Python 跨语言诊断 + MySQL 只读诊断 + 证据质量语义 + 租约 TOCTOU 原子化）。
+D1/D2 能力全部保留；不含 RAG / RabbitMQ / MCP / Action Service / 自动修复
+（见 docs/IMPLEMENTATION_PLAN.md 的 D4 及后续阶段）。
 
 ## 技术栈
 
@@ -88,7 +89,86 @@ API Key 通过 `AGENT_API_KEY_ENV` 间接引用，密钥不入代码）。`fake`
 
 Worker（`entrypoints/worker.py`）以 PostgreSQL 任务认领运行：
 `SELECT FOR UPDATE SKIP LOCKED` + 租约心跳 + `lease_owner`/`fence_token` fencing
-（旧 Worker 失效后禁止回写）；业务状态以 PostgreSQL 为权威，Checkpoint 仅用于图执行恢复。
+（旧 Worker 失效后禁止回写；**业务写入与租约校验同事务原子执行**，接管方在
+原 Worker 事务提交前无法认领，消除 TOCTOU 竞态）；
+业务状态以 PostgreSQL 为权威，Checkpoint 仅用于图执行恢复。
+
+## D3 跨语言接入与可扩展诊断
+
+### Capability Registry（连接器能力注册中心）
+
+新增迁移 `0003_d3_registry`（`connector_types` / `connector_instances` /
+`capability_manifests` / `capability_test_runs` / `asset_observability_bindings`）。
+核心设计：
+
+- **Manifest v1 冻结 Schema**：`manifest_version`（仅 `"1"`）、`read_only=true`
+  强制、`min_platform` 兼容校验；不兼容 Manifest 在注册时被拒绝（API 返回 rejected 列表）。
+- **Connector Type ↔ Instance 分离**：同一 Type 可注册多个实例，各绑不同企业资产
+  与连接配置（如两个 Prometheus 实例分别服务不同环境）。
+- **按资产解析实例**（修复 D2 按 connector_type 聚合导致同类实例相互覆盖的问题）：
+  解析顺序 = 资产绑定（`asset_observability_bindings`）→ 单一 enabled 实例默认 →
+  多实例未绑定时拒绝（`INSTANCE_AMBIGUOUS`）。Agent 调用工具时依据授权资产解析
+  对应实例，**不串用其他资产的凭据或数据**。
+- 连接器插件仅允许代码审查后随镜像部署的内置实现（docker.logs / redis.ping /
+  http.probe / prometheus.query / jaeger.traces / mysql.diagnostics），
+  不支持上传任意脚本执行。
+- 单连接器故障不影响其他连接器（异常隔离为 unavailable Evidence）。
+
+### 可观测性标准化接入
+
+| 连接器 | 数据面 | 受控约束 |
+|---|---|---|
+| `prometheus.query` | GET /api/v1/query_range | 模板白名单（实例 config `allowed_templates`），`{service}` 由网关注入授权资产值；时间范围 ≤1h、点数 ≤60 |
+| `jaeger.traces` | Jaeger HTTP API（service 搜索 + trace 详情） | trace_id 格式校验、limit=5、时间范围受限 |
+| `mysql.diagnostics` | 预定义只读查询（SHOW STATUS/VARIABLES + performance_schema 慢查询摘要） | 最小权限只读账号（`opspilot_ro`），密码经 `password_env` 环境变量注入，无通用 SQL 执行器 |
+
+OTel：demo-java / demo-app 经 OTLP（4318）导出到 Jaeger all-in-one，
+Prometheus 抓取两个服务的指标端点。目标服务返回的日志/Trace 属性视为
+不可信数据（仅作证据，不当指令）。
+
+### Java + Python 跨语言诊断
+
+`demo-java/`：Spring Boot 3.3.5（Java 17）真实服务——健康检查（actuator）、
+业务接口（订单）、Micrometer→Prometheus 指标、Micrometer Tracing→OTLP→Jaeger 链路。
+故障注入场景：J1 接口延迟、J2 异常响应（错误率）、J3 依赖故障（下游 503）。
+两种语言服务均真实运行于 Docker Compose，**同一 AgentRuntime / Tool Gateway /
+报告机制诊断**（不复制 Agent 引擎）。能力边界：未接入 JMX/JVM 专用指标时，
+JVM 内存/GC/线程池细节不可观测（诊断依赖日志、HTTP 指标与链路数据）。
+
+### 证据质量语义（向后兼容）
+
+`classify_evidence` 四分类：`HEALTHY`（ok）/ `FAULT_OBSERVED`（成功采集到目标
+错误响应，如 HTTP_504——**有效故障观测，但不足以证明具体上游根因**）/
+`INDETERMINATE`（超时、连接错误等不可判读）/ `COLLECTION_FAILED`（连接器失败）。
+`supported` 根因须 ≥1 条 `root_cause_capable`（HEALTHY 或 FAULT_OBSERVED）证据；
+仅有采集失败/不可判读证据时降级为 unknown（不编造根因）。
+
+### D3 新增 API
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/v1/integrations` | 连接器实例列表（含最近测试结果） |
+| `POST /api/v1/integrations` | 注册实例（拒绝未知 Type 与内联密钥） |
+| `POST /api/v1/integrations/{id}/test` | 连通性测试（记录 `capability_test_runs`，Admin） |
+| `POST /api/v1/integrations/{id}/enable` / `disable` | 启用/禁用实例（Admin） |
+| `GET /api/v1/capabilities` | 能力发现（内置 6 Manifest） |
+| `POST /api/v1/capabilities/{key}/tests` | 触发能力测试（Admin） |
+| `GET/PUT/DELETE /api/v1/assets/{id}/observability-bindings` | 资产↔实例绑定管理 |
+
+Web 控制台新增"连接器"页：查看能力/实例、配置与绑定资产、测试连通性、
+查看最近一次测试结果。
+
+### D3 演示流程
+
+```bash
+docker compose up --build -d          # 全部服务（含 demo-java / prometheus / jaeger / demo-mysql）
+uv run python scripts/seed_demo.py    # 6 类型 / 6 实例 / 6 资产 / 5 绑定（幂等）
+
+powershell -File scripts/demo/faults.ps1 inject J2     # Java 异常响应（错误率）
+powershell -File scripts/demo/faults.ps1 inject J3     # Java 依赖故障（下游 503）
+powershell -File scripts/demo/faults.ps1 inject M1     # MySQL 慢查询负载
+powershell -File scripts/demo/faults.ps1 recover M1
+```
 
 ## 演示（D1-B 链路）
 
@@ -170,7 +250,7 @@ OpsPilot-Next/
 ├── app/
 │   ├── main.py               # FastAPI 应用工厂 + lifespan（引擎初始化/bootstrap）
 │   ├── core/                 # 配置、DB Session、安全（JWT/argon2）、错误、响应包裹、分页
-│   ├── models/               # SQLAlchemy 2 模型（D1 11 张 + D2 诊断域 7 张表）
+│   ├── models/               # SQLAlchemy 2 模型（D1 11 张 + D2 诊断域 7 张 + D3 注册中心 5 张）
 │   ├── domains/
 │   │   ├── auth/             # 登录/改密/Admin 引导（repository + service + schemas）
 │   │   ├── access/           # RBAC 与资产范围判定（纯函数 scope.py）
@@ -180,20 +260,22 @@ OpsPilot-Next/
 │   │   ├── idempotency/      # API 幂等（(user, endpoint, key) 隔离、事务内抢占）
 │   │   ├── audit/            # 审计事件写入与查询
 │   │   ├── runs/             # D2：InvestigationRun 创建/取消/查询（DB 为业务权威）
-│   │   ├── tools/            # D2：Tool Gateway + manifest + 连接器 + 脱敏
-│   │   └── agent/            # D2：AgentRuntime/Provider/Fake 模型/Prompts（ADR-D2）
+│   │   ├── tools/            # D2/D3：Tool Gateway + manifest + registry（按资产解析实例）+ 连接器 + 脱敏
+│   │   ├── agent/            # D2：AgentRuntime/Provider/Fake 模型/Prompts（ADR-D2）
+│   │   └── integrations/     # D3：连接器实例注册/测试/启停 + 能力发现服务
 │   ├── worker/               # D2：DB 认领（SKIP LOCKED）+ 租约心跳 + fence_token fencing
 │   └── api/
 │       ├── deps.py           # Session/当前用户/RBAC/范围依赖注入
-│       └── v1/               # /api/v1 路由（auth / assets / incidents / webhooks / audit / runs / health）
+│       └── v1/               # /api/v1 路由（auth / assets / incidents / webhooks / audit / runs / integrations / capabilities / health）
 ├── entrypoints/              # 单仓三入口：api / worker（D2 ops-worker）/ action（D5 预留）
 ├── roproxy/                  # D2：docker-ro-proxy（Docker Engine API 方法+路径白名单，只读）
-├── demo/                     # D2：演示故障环境（demo-app / gateway.conf / crasher.py）
-├── web/                      # 最小 Web 控制台（nginx:1.27-alpine + 原生 JS，真实调 API；含诊断入口）
+├── demo/                     # D2/D3：演示故障环境（demo-app / gateway.conf / crasher.py / prometheus.yml / mysql-init / mysql_load.sh）
+├── demo-java/                # D3：Java Spring Boot 演示服务（健康/业务/指标/OTel 链路 + J1/J2/J3 故障注入）
+├── web/                      # 最小 Web 控制台（nginx:1.27-alpine + 原生 JS，真实调 API；含诊断与连接器管理入口）
 ├── scripts/                  # seed.py / simulate_alert.py / seed_demo.py / run_scenario.py / demo/faults.ps1
-├── .github/workflows/ci.yml  # CI：Ruff + mypy + pytest（真实 PG）+ Alembic 空库演练（D2 表校验）
-├── alembic/                  # 迁移脚本（async env.py；0001 初始 + 0002 D2 诊断域）
-├── tests/                    # 单元测试 + 真实 PostgreSQL 集成测试（含 worker/gateway/roproxy/迁移演练）
+├── .github/workflows/ci.yml  # CI：Ruff + mypy + pytest（真实 PG）+ Alembic 空库演练（含 D3 表校验）
+├── alembic/                  # 迁移脚本（async env.py；0001 初始 + 0002 D2 诊断域 + 0003 D3 注册中心）
+├── tests/                    # 单元测试 + 真实 PostgreSQL 集成测试（含 worker/gateway/roproxy/integrations/迁移演练）
 ├── docker-compose.yml        # postgres + api + web + worker + docker-ro-proxy + demo(profile)
 └── pyproject.toml            # uv/依赖/Ruff/mypy/pytest 配置
 ```

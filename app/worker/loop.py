@@ -111,7 +111,12 @@ class AgentWorker:
             await pool.close()
 
     async def run_forever(self) -> None:
-        await self.startup()
+        try:
+            await self.startup()
+        except Exception:  # noqa: BLE001 — 启动失败必须可见地终止（配置错误不能悬挂进程）
+            logger.exception("worker startup failed; exiting")
+            await self.shutdown()
+            return
         try:
             while not self._stop.is_set():
                 row = await claim.claim_next_run(

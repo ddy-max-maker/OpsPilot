@@ -15,7 +15,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from deepagents import GeneralPurposeSubagentProfile, HarnessProfile, create_deep_agent
 from deepagents.backends.state import StateBackend
@@ -24,6 +24,7 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
@@ -41,6 +42,7 @@ from app.domains.agent.prompts import (
     build_run_task_prompt,
 )
 from app.domains.tools.context import (
+    LEASE_GUARD_SQL,
     LeaseFence,
     LeaseLostError,
     RunBudget,
@@ -49,11 +51,11 @@ from app.domains.tools.context import (
     RunToolContext,
     ToolBudgetExhausted,
 )
+from app.domains.tools.evidence_quality import classify_evidence, root_cause_capable
 from app.domains.tools.gateway import ToolGateway
+from app.domains.tools.registry import load_resolution_map
 from app.models import (
     Asset,
-    ConnectorInstance,
-    ConnectorType,
     DiagnosticReport,
     Evidence,
     Hypothesis,
@@ -153,21 +155,11 @@ async def load_connector_configs(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
 ) -> dict[str, dict[str, Any]]:
-    """读取启用连接器实例配置（connector_code -> config）。"""
-    async with session_factory() as session:
-        rows = (
-            await session.execute(
-                select(ConnectorInstance, ConnectorType)
-                .join(ConnectorType, ConnectorInstance.connector_type_id == ConnectorType.id)
-                .where(ConnectorInstance.status == "enabled")
-            )
-        ).all()
-    configs: dict[str, dict[str, Any]] = {}
-    for instance, ctype in rows:
-        cfg = dict(instance.config or {})
-        cfg.setdefault("timeout_seconds", settings.connector_timeout_seconds)
-        configs[ctype.code] = cfg
-    return configs
+    """（D2 兼容保留）按类型聚合的连接器配置；D3 起优先使用 load_resolution_map。"""
+    from app.domains.tools.registry import load_resolution_map as _load  # noqa: PLC0415
+
+    m = await _load(session_factory)
+    return {code: instances[0].config for code, instances in m.enabled_by_type.items() if instances}
 
 
 class AgentRuntime:
@@ -202,6 +194,17 @@ class AgentRuntime:
         ctx, configs = await self._build_context(execution, budget)
         agent = self.build_agent(ctx, execution.events)
         config = {"configurable": {"thread_id": run.id}}
+        # D3：主资产绑定的指标模板白名单（query_metrics 可用键，进任务提示）
+        metric_templates: list[str] | None = None
+        prom_binding = (
+            ctx.instance_map.bindings.get((execution.asset.id, "prom-ro"))
+            if ctx.instance_map is not None
+            else None
+        )
+        if prom_binding is not None:
+            templates = prom_binding.config.get("allowed_templates")
+            if isinstance(templates, dict) and templates:
+                metric_templates = sorted(templates)
         task_prompt = build_run_task_prompt(
             incident_id=execution.incident.id,
             incident_title=execution.incident.title,
@@ -212,6 +215,7 @@ class AgentRuntime:
             asset_type=str(execution.asset.asset_type),
             asset_endpoints=execution.asset.endpoints,
             authorized_assets=sorted(ctx.authorized_asset_ids),
+            metric_templates=metric_templates,
         )
 
         await execution.events.append(
@@ -225,6 +229,7 @@ class AgentRuntime:
 
         final_message: Any = None
         last_evidence_count = 0
+        last_round_calls = 0
         stale_rounds = 0
         try:
             async for chunk in agent.astream(
@@ -247,15 +252,19 @@ class AgentRuntime:
                     )
                 if (budget.tokens_in + budget.tokens_out) > budget.max_tokens:
                     raise TokenBudgetExhausted(f"max_tokens={budget.max_tokens} exhausted")
-                # 停止条件：连续 N 个取证轮（工具步）无新证据 → no_new_evidence
-                if "tools" in chunk:
-                    current = await self._count_evidence(run.id)
-                    if current > last_evidence_count:
-                        last_evidence_count = current
+                # 停止条件：连续 N 个模型轮无新增网关取证调用 → no_new_evidence
+                # D3 修正（实证）：DeepAgents 对一批并行工具调用会流式产出多个
+                # "tools" chunk（每工具完成一个），且预算计数在调用开始即递增——
+                # chunk 级计数会把同批 chunk 误判为空转。故以"模型轮边界"评估：
+                # 两个模型轮之间没有发生任何新的网关取证调用 → 该轮无新证据。
+                if "tools" not in chunk:
+                    if budget.tool_calls_used > last_round_calls:
+                        last_round_calls = budget.tool_calls_used
+                        last_evidence_count = await self._count_evidence(run.id)
                         stale_rounds = 0
-                    else:
+                    elif last_evidence_count > 0:
                         stale_rounds += 1
-                        if stale_rounds >= settings.no_new_evidence_rounds and current > 0:
+                        if stale_rounds >= settings.no_new_evidence_rounds:
                             raise _NoNewEvidence()
         except RunCanceled:
             return RunOutcome(
@@ -304,6 +313,12 @@ class AgentRuntime:
 
         # 正常结束：解析最终 JSON 报告
         report_data = _parse_report(final_message)
+        if report_data is None:
+            logger.warning(
+                "run %s final AI message not parseable as report JSON: %.400r",
+                run.id,
+                getattr(final_message, "content", None),
+            )
         outcome = await self._finalize_report(execution, report_data, budget)
         return outcome
 
@@ -332,24 +347,30 @@ class AgentRuntime:
         unknown_note: dict[str, Any] = dict(report_data.get("unknown") or {})
         is_unknown = bool(unknown_note.get("is_unknown"))
 
-        # 证据引用有效性：全部 evidence_ids 必须命中本 run 已落库 Evidence，
-        # 并记录证据状态（D2.1：区分正常取证与采集失败——连接器错误不自动等于业务根因）
+        # 证据引用有效性：全部 evidence_ids 必须命中本 run 已落库 Evidence；
+        # D3 证据质量四分类：healthy（正常取证）/ fault_observed（成功采集到目标
+        # 错误响应，如 HTTP 504——有效故障观测）/ indeterminate（采集超时/连接错误，
+        # 不单独支撑根因）/ collection_failed（采集通道问题，不等于业务根因）
         async with deps.session_factory() as session:
             rows = (
                 await session.execute(
-                    select(Evidence.id, Evidence.status).where(Evidence.run_id == run.id)
+                    select(
+                        Evidence.id, Evidence.status, Evidence.error_code, Evidence.data_ref
+                    ).where(Evidence.run_id == run.id)
                 )
             ).all()
         existing = {row.id for row in rows}
-        ok_evidence = {row.id for row in rows if row.status == "ok"}
+        quality_by_id = {
+            row.id: classify_evidence(row.status, row.error_code, row.data_ref) for row in rows
+        }
         key_findings = report_data.get("key_findings") or []
         for finding in key_findings:
             refs = finding.get("evidence_ids") or []
             finding["evidence_ids"] = [r for r in refs if r in existing]
 
         # 假设：supported 必须有 ≥1 条本 run 实时证据（CONTRACTS §2.7）；
-        # D2.1：且至少 1 条 status=ok 的正常取证——仅由 error/unavailable 证据
-        # （连接器不可用、工具失败）支撑的假设不构成业务根因，降级为 insufficient_data
+        # D3：且至少 1 条 root_cause_capable 证据（healthy 或 fault_observed）——
+        # 仅由采集失败/超时证据支撑的假设不构成业务根因，降级为 insufficient_data
         hypotheses: list[dict[str, Any]] = []
         for rank, item in enumerate(report_data.get("hypotheses") or [], start=1):
             supporting = [r for r in (item.get("supporting_evidence_ids") or []) if r in existing]
@@ -362,9 +383,11 @@ class AgentRuntime:
                 if not supporting:
                     status = HypothesisStatus.INSUFFICIENT_DATA.value
                     demote_reason = "无有效实时证据"
-                elif not any(r in ok_evidence for r in supporting):
+                elif not any(
+                    root_cause_capable(quality_by_id[r]) for r in supporting if r in quality_by_id
+                ):
                     status = HypothesisStatus.INSUFFICIENT_DATA.value
-                    demote_reason = "仅有采集失败证据（error/unavailable），不构成根因支持"
+                    demote_reason = "仅有采集失败或不可判读证据，不构成根因支持"
             if is_unknown and status == HypothesisStatus.SUPPORTED.value:
                 # unknown 报告不得存在 supported 根因（CONTRACTS §2.16）
                 status = HypothesisStatus.INSUFFICIENT_DATA.value
@@ -389,11 +412,35 @@ class AgentRuntime:
             )
 
         # 落库：hypotheses + diagnostic_reports（版本号递增：接管重跑写 v2+，禁止覆盖）
-        # D2.1 fencing：旧 Worker 失去租约后禁止假设/报告写入
-        if execution.lease_fence is not None:
-            await execution.lease_fence.assert_valid()
-        hypothesis_ids: list[str] = []
+        # D3 TOCTOU：同事务租约护栏（行锁持有至提交，接管方无法在期间完成 claim）
+        # 注意：HYPOTHESIS_ADDED 事件必须在护栏事务之外追加——RunEventWriter 的
+        # 护栏会等同一行锁，护栏事务内等待事件写入将自锁死锁（D3 修复）
+        hypothesis_ids = [new_id("hyp_") for _ in hypotheses]
+        for hyp_id, item in zip(hypothesis_ids, hypotheses, strict=True):
+            await execution.events.append(
+                RunEventType.HYPOTHESIS_ADDED,
+                {
+                    "hypothesis_id": hyp_id,
+                    "rank": item["rank"],
+                    "status": item["status"],
+                    "statement": item["statement"][:200],
+                },
+            )
         async with deps.session_factory() as session:
+            if execution.lease_fence is not None:
+                guard = cast(
+                    "CursorResult[Any]",
+                    await session.execute(
+                        LEASE_GUARD_SQL,
+                        {
+                            "run_id": run.id,
+                            "fence_token": execution.lease_fence.fence_token,
+                            "worker_id": execution.lease_fence.worker_id,
+                        },
+                    ),
+                )
+                if guard.rowcount == 0:
+                    raise LeaseLostError(f"run {run.id} lease lost before report write")
             next_version = (
                 int(
                     await session.scalar(
@@ -405,9 +452,7 @@ class AgentRuntime:
                 )
                 + 1
             )
-            for item in hypotheses:
-                hyp_id = new_id("hyp_")
-                hypothesis_ids.append(hyp_id)
+            for hyp_id, item in zip(hypothesis_ids, hypotheses, strict=True):
                 session.add(
                     Hypothesis(
                         id=hyp_id,
@@ -420,15 +465,6 @@ class AgentRuntime:
                         missing_information=item["missing_information"],
                         confidence=item["confidence"],
                     )
-                )
-                await execution.events.append(
-                    RunEventType.HYPOTHESIS_ADDED,
-                    {
-                        "hypothesis_id": hyp_id,
-                        "rank": item["rank"],
-                        "status": item["status"],
-                        "statement": item["statement"][:200],
-                    },
                 )
             report = DiagnosticReport(
                 id=new_id("rpt_"),
@@ -478,9 +514,22 @@ class AgentRuntime:
         """
         deps = self._deps
         run = execution.run
-        if execution.lease_fence is not None:
-            await execution.lease_fence.assert_valid()
         async with deps.session_factory() as session:
+            # D3 TOCTOU：同事务租约护栏（行锁持有至提交）
+            if execution.lease_fence is not None:
+                guard = cast(
+                    "CursorResult[Any]",
+                    await session.execute(
+                        LEASE_GUARD_SQL,
+                        {
+                            "run_id": run.id,
+                            "fence_token": execution.lease_fence.fence_token,
+                            "worker_id": execution.lease_fence.worker_id,
+                        },
+                    ),
+                )
+                if guard.rowcount == 0:
+                    raise LeaseLostError(f"run {run.id} lease lost before fallback report")
             existing = sorted(
                 (
                     await session.execute(select(Evidence.id).where(Evidence.run_id == run.id))
@@ -529,7 +578,7 @@ class AgentRuntime:
     ) -> tuple[RunToolContext, dict[str, dict[str, Any]]]:
         deps = self._deps
         snapshot: dict[str, Any] = dict(execution.run.authorization_snapshot or {})
-        configs = await load_connector_configs(deps.session_factory, deps.settings)
+        instance_map = await load_resolution_map(deps.session_factory)
         ctx = RunToolContext(
             run_id=execution.run.id,
             environment=str(execution.incident.environment),
@@ -539,10 +588,14 @@ class AgentRuntime:
             authorized_environments=frozenset(snapshot.get("environments") or []),
             budget=budget,
             cancel_checker=execution.cancel_checker,
-            connector_configs=configs,
+            connector_configs={},
             all_assets=bool(snapshot.get("all_assets")),
+            instance_map=instance_map,
             lease_fence=execution.lease_fence,
         )
+        configs = {
+            code: items[0].config for code, items in instance_map.enabled_by_type.items() if items
+        }
         return ctx, configs
 
     async def _count_evidence(self, run_id: str) -> int:

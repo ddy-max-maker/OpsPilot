@@ -95,6 +95,10 @@ jobs:
           grep -q "connector_types" /tmp/tables.txt
           grep -q "connector_instances" /tmp/tables.txt
           grep -q "secret_refs" /tmp/tables.txt
+          # D3：Capability Registry 表
+          grep -q "capability_manifests" /tmp/tables.txt
+          grep -q "capability_test_runs" /tmp/tables.txt
+          grep -q "asset_observability_bindings" /tmp/tables.txt
           # D2：langgraph 独立 schema（checkpoint 存储，ADR-5）
           psql -h localhost -U opspilot -d opspilot -c "\dn langgraph" | grep -q "langgraph"
 

@@ -25,6 +25,8 @@ _TOOL_PLAN = (
     ("check_redis_health", ("cache",)),
     ("get_container_status", None),
     ("read_container_logs", None),
+    # D3：database 资产走 MySQL 只读诊断（跨语言/多能力确定性回归）
+    ("read_mysql_diagnostics", ("database",)),
 )
 
 _TYPE_RE = re.compile(r"type=([a-z]+)")

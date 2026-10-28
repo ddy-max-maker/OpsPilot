@@ -689,6 +689,113 @@ async function loadAuditView() {
     </div>`;
 }
 
+// ---- 连接器管理（D3：Integrations / Capabilities / 绑定 / 连通性测试） ----
+
+async function loadIntegrationsView() {
+  $app.innerHTML = `<div class="empty">加载中…</div>`;
+  let data;
+  try {
+    data = await api("/integrations");
+  } catch (err) {
+    $app.innerHTML = `<div class="panel"><div class="empty">加载失败（需要 Admin 角色）：${esc(err.message)}</div></div>`;
+    return;
+  }
+  const caps = await api("/capabilities").catch(() => ({ capabilities: [] }));
+  $app.innerHTML = `
+    <div class="page-head"><h1>连接器与能力（Capability Registry）</h1></div>
+    <div class="panel">
+      <h2>连接器类型（内置，代码审查后部署）</h2>
+      <table>
+        <thead><tr><th>代码</th><th>名称</th><th>Manifest 版本</th><th>兼容性</th></tr></thead>
+        <tbody>
+          ${(data.types || []).map((t) => `
+            <tr>
+              <td><code>${esc(t.code)}</code></td>
+              <td>${esc(t.display_name)}</td>
+              <td>${esc(t.manifest_version || "-")}</td>
+              <td><span class="mono">${esc(JSON.stringify(t.compatibility || {})).slice(0, 60)}</span></td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>连接器实例（Integrations）</h2>
+      <table id="instance-table">
+        <thead><tr><th>名称</th><th>类型</th><th>状态</th><th>配置</th><th>操作</th></tr></thead>
+        <tbody>
+          ${(data.instances || []).map((i) => `
+            <tr data-id="${esc(i.id)}">
+              <td>${esc(i.name)}</td>
+              <td><code>${esc(i.connector_type)}</code></td>
+              <td><span class="badge ${i.status === "enabled" ? "" : "muted"}">${esc(i.status)}</span></td>
+              <td><span class="mono">${esc(JSON.stringify(i.config || {})).slice(0, 80)}…</span></td>
+              <td>
+                <button class="btn ghost" data-act="test">测试</button>
+                ${i.status === "enabled"
+                  ? '<button class="btn ghost" data-act="disable">禁用</button>'
+                  : '<button class="btn ghost" data-act="enable">启用</button>'}
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+      <div id="instance-test-result" class="mono"></div>
+    </div>
+    <div class="panel">
+      <h2>最近能力/连通性测试</h2>
+      ${(data.tests || []).length ? `
+      <table>
+        <thead><tr><th>结果</th><th>实例</th><th>探针</th><th>时间</th></tr></thead>
+        <tbody>
+          ${data.tests.map((t) => `
+            <tr>
+              <td><span class="badge ${t.result === "passed" ? "" : "muted"}">${esc(t.result)}</span></td>
+              <td>${esc((t.detail || {}).instance_name || "-")}</td>
+              <td>${esc((t.detail || {}).probe || "-")}</td>
+              <td>${fmtTime(t.created_at)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>` : '<div class="empty">暂无测试记录。</div>'}
+    </div>
+    <div class="panel">
+      <h2>能力发现（GET /capabilities）</h2>
+      <table>
+        <thead><tr><th>Capability</th><th>Source</th><th>只读</th><th>超时/限流</th></tr></thead>
+        <tbody>
+          ${(caps.capabilities || []).map((c) => `
+            <tr>
+              <td><code>${esc(c.capability_key)}</code></td>
+              <td>${esc(c.source_type || "")}</td>
+              <td>${c.read_only ? "true" : "false"}</td>
+              <td>${esc(String(c.timeout_ms || "-"))}ms / ${esc(String((c.rate_limit || {}).max_calls_per_run || "-"))}/run</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+
+  document.getElementById("instance-table").addEventListener("click", async (event) => {
+    const btn = event.target.closest("button[data-act]");
+    if (!btn) return;
+    const row = btn.closest("tr");
+    const id = row.dataset.id;
+    const act = btn.dataset.act;
+    btn.disabled = true;
+    try {
+      const res = await api(`/integrations/${id}/${act}`, { method: "POST" });
+      if (act === "test") {
+        document.getElementById("instance-test-result").textContent =
+          `最近一次测试：${res.result} — ${res.probe}`;
+      } else {
+        toast(`已${act === "enable" ? "启用" : "禁用"}`);
+        await loadIntegrationsView();
+      }
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 // ---- 路由 ----
 
 function setActiveNav(key) {
@@ -723,6 +830,9 @@ async function route() {
   } else if (hash === "#/assets") {
     setActiveNav("assets");
     await loadAssetsView();
+  } else if (hash === "#/integrations") {
+    setActiveNav("integrations");
+    await loadIntegrationsView();
   } else if (hash === "#/audit") {
     setActiveNav("audit");
     await loadAuditView();

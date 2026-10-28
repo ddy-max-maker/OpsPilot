@@ -12,12 +12,13 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import sys
 
 from app.core.config import get_settings
 from app.worker.loop import AgentWorker
+
+logger = logging.getLogger("opspilot.worker")
 
 
 def main() -> None:
@@ -33,8 +34,13 @@ def main() -> None:
 
     async def _run() -> None:
         task = asyncio.create_task(worker.run_forever())
-        with contextlib.suppress(asyncio.CancelledError):
+        try:
             await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # asyncio.run 清理阶段可能因残留任务悬挂——异常必须先落日志再传播
+            logger.exception("worker task terminated unexpectedly")
 
     try:
         asyncio.run(_run())

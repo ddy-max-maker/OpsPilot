@@ -109,7 +109,14 @@ async def proxy(path: str, request: Request) -> Response:
         return JSONResponse(status_code=502, content={"error": f"upstream {resp.status_code}"})
     if upstream_path == "/containers/json":
         return JSONResponse(content={"containers": resp.json()})
-    return JSONResponse(content=resp.json())
+    if upstream_path == "/_ping":
+        # Docker /_ping 返回纯文本 "OK"（非 JSON），按文本透传
+        return JSONResponse(content={"ping": resp.text.strip()[:16]})
+    try:
+        return JSONResponse(content=resp.json())
+    except ValueError:
+        # 非 JSON 上游响应按文本透传（不伪造 JSON）
+        return JSONResponse(content={"body": resp.text[:4096]})
 
 
 async def _proxy_logs(upstream_path: str, params: dict[str, str]) -> Response:
