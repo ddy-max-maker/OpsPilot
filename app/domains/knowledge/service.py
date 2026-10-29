@@ -384,8 +384,17 @@ async def create_runbook(
     allowed_environments: list[str],
     allowlist_action_keys: list[str],
 ) -> tuple[Runbook, RunbookVersion]:
-    """创建 Runbook + v1 草稿版本（无执行链路；D5 才消费已发布版本）。"""
+    """创建 Runbook + v1 草稿版本（无执行链路；D5 才消费已发布版本）。
+
+    D6 修复：重名（UNIQUE(name)）在 flush 时映射为稳定 409（此前 IntegrityError
+    冒泡为 500）。
+    """
     _validate_runbook_environments(allowed_environments)
+    duplicate = (
+        await session.execute(select(Runbook).where(Runbook.name == name))
+    ).scalar_one_or_none()
+    if duplicate is not None:
+        raise conflict_state("runbook name already exists", details={"name": name})
     runbook = Runbook(
         id=new_id("rb_"),
         name=name,

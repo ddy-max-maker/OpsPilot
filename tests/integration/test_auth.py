@@ -1,4 +1,4 @@
-"""认证 API 集成测试：登录成败、首登改密、Token 校验、/auth/me。"""
+﻿"""认证 API 集成测试：登录成败、首登改密、Token 校验、/auth/me。"""
 
 from __future__ import annotations
 
@@ -126,13 +126,13 @@ async def test_expired_token_rejected(client: httpx.AsyncClient) -> None:
     token = login.json()["data"]["access_token"]  # 有效账号，用于过审依赖
     assert token
     settings = get_settings()
-    expired, _ = create_access_token("usr_expired", settings.jwt_secret, -1)
+    expired, _e, _jti = create_access_token("usr_expired", settings.jwt_secret, -1)
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(expired))
     assert resp.status_code == 401
 
 
 async def test_token_with_wrong_secret_rejected(client: httpx.AsyncClient) -> None:
-    forged, _ = create_access_token("usr_forged", "attacker-secret", 30)
+    forged, _e, _jti = create_access_token("usr_forged", "attacker-secret", 30)
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(forged))
     assert resp.status_code == 401
 
@@ -181,13 +181,15 @@ async def test_change_password_flow(client: httpx.AsyncClient, db_session_factor
     )
     assert same.status_code == 400
 
-    # 改密成功
+    # 改密成功（D6：响应携带重新签发的新 token；旧 token 即刻失效）
     ok_resp = await client.post(
         "/api/v1/auth/change-password",
         json={"old_password": ADMIN_BOOT_PASSWORD, "new_password": "NewSecure123!"},
         headers=headers,
     )
     assert ok_resp.status_code == 200
+    rotated = ok_resp.json()["data"]["access_token"]
+    assert rotated and rotated != token
 
     # 旧密码登录失败，新密码登录成功
     old_login = await api_login(client, ADMIN_BOOT_USERNAME, ADMIN_BOOT_PASSWORD)
@@ -195,9 +197,12 @@ async def test_change_password_flow(client: httpx.AsyncClient, db_session_factor
     new_login = await api_login(client, ADMIN_BOOT_USERNAME, "NewSecure123!")
     assert new_login.status_code == 200
 
-    # 原 token 立即可用（must_change_password 已清除）
+    # 改密前签发的旧 token 已被服务端失效（D6 安全加固）
     assets = await client.get("/api/v1/assets", headers=headers)
-    assert assets.status_code == 200
+    assert assets.status_code == 401
+    # 改密响应中的新 token 可用
+    assets_new = await client.get("/api/v1/assets", headers=auth_headers(rotated))
+    assert assets_new.status_code == 200
 
     # 改密审计
     async with db_session_factory() as session:
@@ -240,3 +245,4 @@ async def test_unknown_route_envelope(client: httpx.AsyncClient, path: str, meth
     resp = await client.request(method, "/api/v1/__not_exist__")
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "NOT_FOUND"
+

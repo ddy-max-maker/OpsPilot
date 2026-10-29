@@ -44,16 +44,27 @@ class ExecutionOutcome:
 
 
 class ActionExecutor:
-    """Allowlist 动作执行器：目前仅支持 restart_container@v1。"""
+    """Allowlist 动作执行器：目前仅支持 restart_container@v1。
+
+    安全门禁（D6）：execution_enabled=False（默认）时所有动作直接
+    PRE_CHECK_FAILED（demo-only 守卫）——应用层 allowlist 不等于基础设施
+    级隔离，真实执行仅在专用隔离演示 Daemon 上显式开启。
+    """
 
     def __init__(
         self,
         *,
         container_name_prefix: str,
         docker: DockerClient | None = None,
+        execution_enabled: bool = True,
     ) -> None:
         self._prefix = container_name_prefix
         self._docker = docker or DockerClient()
+        self._execution_enabled = execution_enabled
+
+    @property
+    def execution_enabled(self) -> bool:
+        return self._execution_enabled
 
     async def precheck_container(self, container_name: str) -> dict[str, Any] | None:
         """动作前检查：命名空间 allowlist + 容器实际存在（真实状态记录进审计）。
@@ -162,6 +173,16 @@ class ActionExecutor:
 
     async def execute(self, *, action_key: str, parameters: dict[str, Any]) -> ExecutionOutcome:
         """统一入口：action_key → 具体动作（未登记动作显式拒绝）。"""
+        if not self._execution_enabled:
+            # D6 安全门禁：未显式开启真实执行时一律拒绝（demo-only）
+            return ExecutionOutcome(
+                status=OutcomeStatus.PRE_CHECK_FAILED,
+                result_detail={
+                    "reason": "action execution is disabled (demo-only guard); real "
+                    "execution requires ACTION_EXECUTION_ENABLED=true on an isolated "
+                    "demo daemon"
+                },
+            )
         if action_key == "restart_container@v1":
             return await self.execute_restart_container(
                 container_name=str(parameters["container_name"]),

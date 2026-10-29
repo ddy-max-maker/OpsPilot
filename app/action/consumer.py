@@ -31,11 +31,19 @@ from app.action.verification import verify_execution
 from app.core.config import Settings, get_settings
 from app.core.enums import ActorType
 from app.domains.approvals import service as approvals_service
+from app.domains.approvals.allowlist import (
+    ACTION_ALLOWLIST,
+    is_registered_container_name,
+    resolve_container_name,
+    validate_parameters,
+)
+from app.domains.approvals.service import _resolve_action_key
 from app.domains.audit import service as audit_service
 from app.models import (
     ActionExecution,
     ActionExecutionStatus,
     Approval,
+    Asset,
     Proposal,
     ProposalStatus,
     RunbookStatus,
@@ -54,29 +62,42 @@ def _parse_payload(body: bytes) -> dict[str, Any]:
     return data
 
 
-async def _recheck_authorization(
-    session: AsyncSession, *, payload: dict[str, Any], settings: Settings
-) -> str | None:
-    """执行前复核（返回 None = 通过；否则返回拒绝原因）。
+async def _load_authorized_context(
+    session: AsyncSession,
+    *,
+    execution_id: str,
+    settings: Settings,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """执行前复核（D6 加固）：以数据库为唯一权威来源导出执行上下文。
 
-    复核项：proposal 状态、审批快照、参数哈希、有效期、Runbook 版本仍发布。
-    该复核独立于 HTTP 请求与 checkpoint——直接以数据库权威状态为准。
+    RabbitMQ 消息仅作为"执行通知"，任何消息字段都不作为参数/目标/动作来源。
+    返回 (拒绝原因, 执行上下文)；通过时上下文包含从 DB 导出的
+    action_key / parameters / container_name / environment / asset_id。
+
+    复核链（全链 DB 读取 + 规范化重算）：
+    1. ActionExecution → Proposal（状态/有效期/环境/资产）；
+    2. Approval（approved/未过期/四眼/快照哈希一致）；
+    3. 规范化重算 parameter_hash（runbook_version_id + canonical(parameters)）
+       与 proposal 及审批快照三方比对——任何篡改都会导致哈希不一致；
+    4. RunbookVersion（published、r0/r1）→ allowlist 解析唯一 action_key，
+       且必须与 execution.action_key 一致（防消息替换动作语义）；
+    5. Asset（active、环境匹配）→ 容器身份必须以资产 endpoints 登记
+       为权威（无登记容器身份的资产不能执行；参数容器名必须与登记一致）；
+    6. 代码级 Allowlist 参数 schema 校验。
     """
-    proposal = await session.get(Proposal, str(payload.get("proposal_id")))
+    execution = await session.get(ActionExecution, execution_id)
+    if execution is None:
+        return "execution not found", None
+    proposal = await session.get(Proposal, execution.proposal_id)
     if proposal is None:
-        return "proposal not found"
+        return "proposal not found", None
     if proposal.status != ProposalStatus.EXECUTING:
-        return f"proposal status is {proposal.status}, not executing"
+        return f"proposal status is {proposal.status}, not executing", None
     if proposal.expires_at <= datetime.now(UTC):
-        return "proposal expired"
-    if str(payload.get("parameter_hash")) != proposal.parameter_hash:
-        return "parameter hash mismatch"
-    if str(payload.get("runbook_version_id")) != proposal.runbook_version_id:
-        return "runbook version mismatch"
-    if str(payload.get("target_asset_id")) != proposal.target_asset_id:
-        return "target asset mismatch"
-    if str(payload.get("environment")) != proposal.environment:
-        return "environment mismatch"
+        return "proposal expired", None
+    if proposal.environment not in ("sandbox", "staging"):
+        return f"environment '{proposal.environment}' is not executable", None
+
     approval = (
         (
             await session.execute(
@@ -93,18 +114,80 @@ async def _recheck_authorization(
         .first()
     )
     if approval is None:
-        return "no approved approval record"
+        return "no approved approval record", None
     if approval.decided_by == proposal.created_by_user:
-        return "four-eyes violation detected at consume time"
-    snap = approval.proposal_snapshot
-    if str(snap.get("parameter_hash")) != proposal.parameter_hash:
-        return "approval snapshot parameter hash mismatch"
+        return "four-eyes violation detected at consume time", None
     if approval.expires_at <= datetime.now(UTC):
-        return "approval window expired"
+        return "approval window expired", None
+
     rbv = await session.get(RunbookVersion, proposal.runbook_version_id)
     if rbv is None or rbv.status != RunbookStatus.PUBLISHED:
-        return "runbook version no longer published"
-    return None
+        return "runbook version no longer published", None
+    if rbv.risk_level not in ("r0", "r1"):
+        return f"risk level {rbv.risk_level} is outside the executable scope", None
+
+    # 规范化重算哈希：数据库参数是唯一权威（防消息/DB 篡改路径）
+    db_parameters = dict(proposal.parameters or {})
+    recomputed = approvals_service.compute_parameter_hash(
+        proposal.runbook_version_id, db_parameters
+    )
+    if recomputed != proposal.parameter_hash:
+        return "parameter hash mismatch (proposal)", None
+    snap = approval.proposal_snapshot
+    if (
+        str(snap.get("parameter_hash")) != proposal.parameter_hash
+        or approvals_service.canonical_json(snap.get("parameters"))
+        != approvals_service.canonical_json(db_parameters)
+        or str(snap.get("runbook_version_id")) != proposal.runbook_version_id
+        or str(snap.get("target_asset_id")) != proposal.target_asset_id
+        or str(snap.get("environment")) != proposal.environment
+    ):
+        return "approval snapshot mismatch", None
+
+    # action_key：从 Runbook allowlist + DB 参数解析（与 execution.action_key 比对）
+    try:
+        action_key = _resolve_action_key(rbv, db_parameters)
+    except Exception:  # noqa: BLE001 — 解析失败即拒绝
+        return "action key resolution failed", None
+    if action_key != execution.action_key:
+        return "action key mismatch with execution record", None
+    spec = ACTION_ALLOWLIST.get(action_key)
+    if spec is None:
+        return "action is not registered in the code-level allowlist", None
+    if spec.risk_level != rbv.risk_level:
+        return "runbook risk level does not match the action spec", None
+    param_errors = validate_parameters(spec, db_parameters)
+    if param_errors:
+        return f"parameters rejected: {'; '.join(param_errors)}", None
+
+    asset = await session.get(Asset, proposal.target_asset_id)
+    if asset is None or asset.status != "active":
+        return "target asset not found or inactive", None
+    if asset.environment != proposal.environment:
+        return "target asset does not belong to the proposal environment", None
+
+    # 容器身份：资产 endpoints 登记为权威（无登记 = 拒绝；参数必须与登记一致）
+    asset_endpoints = dict(asset.endpoints) if asset.endpoints else {}
+    container = resolve_container_name(db_parameters, asset_endpoints)
+    if (
+        container is None
+        or not is_registered_container_name(container)
+        or not container.startswith(settings.action_container_name_prefix)
+    ):
+        return "target container is not registered/bound on the asset", None
+
+    return None, {
+        "proposal_id": proposal.id,
+        "incident_id": proposal.incident_id,
+        "environment": proposal.environment,
+        "target_asset_id": proposal.target_asset_id,
+        "action_key": action_key,
+        "parameters": db_parameters,
+        "container_name": container,
+        "risk_level": rbv.risk_level,
+        "runbook_version_id": proposal.runbook_version_id,
+        "requested_at": proposal.updated_at.isoformat() if proposal.updated_at else None,
+    }
 
 
 async def handle_execute_requested(
@@ -115,7 +198,10 @@ async def handle_execute_requested(
     executor_id: str,
     settings: Settings | None = None,
 ) -> None:
-    """处理一条执行请求（幂等；外部动作至多发起一次）。"""
+    """处理一条执行请求（幂等；外部动作至多发起一次）。
+
+    payload 仅用于定位 execution_id（执行通知）；全部执行输入从数据库导出。
+    """
     settings = settings or get_settings()
     execution_id = str(payload.get("execution_id"))
     proposal_id = str(payload.get("proposal_id"))
@@ -125,6 +211,12 @@ async def handle_execute_requested(
         execution = await session.get(ActionExecution, execution_id)
         if execution is None:
             logger.warning("execution %s not found; dropping message", execution_id)
+            return
+        if execution.proposal_id != proposal_id:
+            # 伪造通知：消息声称的 proposal 与执行记录不符 → 直接丢弃
+            logger.warning(
+                "message proposal_id mismatch for execution %s; dropping", execution_id
+            )
             return
         if execution.status != ActionExecutionStatus.PENDING:
             # 重复消息/重投：已进入后续状态 → 不再发起外部动作
@@ -143,10 +235,12 @@ async def handle_execute_requested(
         await session.commit()
 
     try:
-        # ---- 阶段 2：执行前复核（独立只读事务）----
+        # ---- 阶段 2：执行前复核（独立只读事务；DB 为唯一权威）----
         async with session_factory() as session:
-            rejection = await _recheck_authorization(session, payload=payload, settings=settings)
-        if rejection is not None:
+            rejection, context = await _load_authorized_context(
+                session, execution_id=execution_id, settings=settings
+            )
+        if rejection is not None or context is None:
             async with session_factory() as session:
                 execution = await session.get(ActionExecution, execution_id)
                 assert execution is not None
@@ -166,10 +260,10 @@ async def handle_execute_requested(
             logger.warning("execution %s skipped: %s", execution_id, rejection)
             return
 
-        # ---- 阶段 3：执行外部动作（容器身份/状态前检查在执行器内）----
-        parameters = dict(payload.get("parameters") or {})
+        # ---- 阶段 3：执行外部动作（参数/目标全部来自 DB 导出上下文）----
         outcome = await executor.execute(
-            action_key=str(payload.get("action_key")), parameters=parameters
+            action_key=str(context["action_key"]),
+            parameters=dict(context["parameters"]),
         )
 
         # ---- 阶段 4：结果落库 ----
@@ -190,7 +284,7 @@ async def handle_execute_requested(
                     session_factory,
                     execution_id=execution_id,
                     proposal=proposal,
-                    payload=payload,
+                    context=context,
                     executor_id=executor_id,
                     settings=settings,
                 )

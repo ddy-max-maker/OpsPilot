@@ -5,6 +5,7 @@ D1-B：incidents / webhooks / audit-logs（CONTRACTS §5）。
 D2：runs（investigation API）。
 D3：integrations / capabilities / 资产观测绑定。
 D4：knowledge / runbooks（知识生命周期与混合检索）。
+D6：evaluations（评估体系）。
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from app.api.v1 import (
     assets,
     audit,
     auth,
+    evaluations,
     health,
     incidents,
     integrations,
@@ -37,3 +39,4 @@ api_router.include_router(integrations.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(runbooks.router)
 api_router.include_router(proposals.router)
+api_router.include_router(evaluations.router)

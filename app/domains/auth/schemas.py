@@ -37,7 +37,12 @@ class ChangePasswordRequest(BaseModel):
 
 
 class ChangePasswordData(BaseModel):
+    """改密响应：旧 token 即刻失效，响应携带重新签发的新 access_token（D6）。"""
+
     status: str = "ok"
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
 
 
 class MeData(BaseModel):

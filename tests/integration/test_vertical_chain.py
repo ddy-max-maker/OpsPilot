@@ -31,13 +31,14 @@ async def test_full_vertical_chain(client: httpx.AsyncClient, db_session_factory
     assert blocked.status_code == 403
     assert blocked.json()["error"]["code"] == "PASSWORD_CHANGE_REQUIRED"
 
-    # 3) 首登改密 -> 解除拦截
+    # 3) 首登改密 -> 解除拦截（D6：改密响应携带重新签发的新 token；旧 token 失效）
     changed = await client.post(
         "/api/v1/auth/change-password",
         json={"old_password": ADMIN_BOOT_PASSWORD, "new_password": "Vertical123!"},
         headers=headers,
     )
     assert changed.status_code == 200
+    headers = auth_headers(changed.json()["data"]["access_token"])
 
     # 4) 创建资产（Admin 权限放行）
     created = await client.post(

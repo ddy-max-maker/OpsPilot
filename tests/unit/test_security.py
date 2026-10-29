@@ -1,4 +1,4 @@
-"""安全原语单元测试：argon2 哈希 / JWT 签发与校验。"""
+﻿"""安全原语单元测试：argon2 哈希 / JWT 签发与校验。"""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def test_invalid_hash_never_verifies() -> None:
 
 
 def test_access_token_roundtrip() -> None:
-    token, expires_in = create_access_token("usr_1", SECRET, 30)
+    token, expires_in, _jti = create_access_token("usr_1", SECRET, 30)
     assert expires_in == 1800
     payload = decode_access_token(token, SECRET)
     assert payload["sub"] == "usr_1"
@@ -55,13 +55,13 @@ def test_access_token_roundtrip() -> None:
 
 
 def test_expired_token_rejected() -> None:
-    token, _ = create_access_token("usr_1", SECRET, -1)  # 已过期
+    token, _e, _jti = create_access_token("usr_1", SECRET, -1)  # 已过期
     with pytest.raises(TokenValidationError):
         decode_access_token(token, SECRET)
 
 
 def test_wrong_secret_rejected() -> None:
-    token, _ = create_access_token("usr_1", SECRET, 30)
+    token, _e, _jti = create_access_token("usr_1", SECRET, 30)
     with pytest.raises(TokenValidationError):
         decode_access_token(token, "other-secret")
 
@@ -85,6 +85,7 @@ def test_non_access_type_rejected() -> None:
 
 def test_future_issued_token_accepted() -> None:
     """时钟容差：刚签发的 token（iat=now）立即可用。"""
-    token, _ = create_access_token("usr_1", SECRET, 30)
+    token, _e, _jti = create_access_token("usr_1", SECRET, 30)
     time.sleep(0.01)
     assert decode_access_token(token, SECRET)["sub"] == "usr_1"
+

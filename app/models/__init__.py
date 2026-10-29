@@ -9,6 +9,13 @@ from app.models.asset import Asset, AssetEdge
 from app.models.audit import AuditEvent
 from app.models.base import Base
 from app.models.connector import ConnectorInstance, ConnectorType, SecretRef
+from app.models.evaluation import (
+    EvaluationCase,
+    EvaluationCaseKind,
+    EvaluationResult,
+    EvaluationRun,
+    EvaluationSuite,
+)
 from app.models.evidence import DiagnosticReport, Evidence, Hypothesis
 from app.models.execution import (
     ActionExecution,
@@ -56,6 +63,11 @@ __all__ = [
     "ConnectorInstance",
     "ConnectorType",
     "DiagnosticReport",
+    "EvaluationCase",
+    "EvaluationCaseKind",
+    "EvaluationResult",
+    "EvaluationRun",
+    "EvaluationSuite",
     "Evidence",
     "Hypothesis",
     "IdempotencyState",

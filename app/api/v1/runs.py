@@ -2,7 +2,7 @@
 
 - POST /incidents/{incident_id}/investigations  创建 run（202，预算+快照+幂等）
 - GET  /runs/{run_id}                           状态+usage+stop_reason
-- GET  /runs/{run_id}/events                    事件流（默认 JSON 分页；D2 无 SSE）
+- GET  /runs/{run_id}/events                    事件流（JSON 分页；text/event-stream → SSE，D6）
 - POST /runs/{run_id}/cancel                    合作式取消
 - GET  /runs/{run_id}/evidence                  证据列表
 - GET  /runs/{run_id}/report                    诊断报告（最新版本快照）
@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api.deps import (
     CurrentUser,
@@ -23,8 +23,9 @@ from app.api.deps import (
     SettingsDep,
     require_roles,
 )
+from app.core.db import get_session_factory
 from app.core.enums import EvidenceSourceType, EvidenceStatus
-from app.core.errors import idempotency_key_required
+from app.core.errors import idempotency_key_required, validation_error
 from app.core.responses import Envelope, ok
 from app.domains.idempotency.service import (
     endpoint_tag,
@@ -32,6 +33,7 @@ from app.domains.idempotency.service import (
     run_idempotent,
 )
 from app.domains.runs import service as run_service
+from app.domains.runs import sse
 from app.domains.runs.schemas import (
     EvidenceListData,
     InvestigationCreateRequest,
@@ -111,13 +113,42 @@ async def get_run(
 @router.get("/runs/{run_id}/events", response_model=Envelope[RunEventListData])
 async def list_run_events(
     run_id: str,
+    request: Request,
     session: SessionDep,
     settings: SettingsDep,
     scope: ReadScopeDep,
     after_seq: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
-) -> Envelope[RunEventListData]:
-    """事件流增量拉取（JSON 分页为默认响应；SSE 仅 D6 起对显式 Accept 开放）。"""
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> Envelope[RunEventListData] | StreamingResponse:
+    """事件流：默认 JSON 分页（D2 契约不变）；显式 Accept: text/event-stream → SSE（D6）。
+
+    SSE 语义见 app/domains/runs/sse.py：id=seq、Last-Event-ID 重放、心跳注释、
+    终态 end 帧关闭；订阅前完成登录态与资产读取权限校验（越权 404 伪装）。
+    """
+    if "text/event-stream" in request.headers.get("accept", "").lower():
+        start_seq = after_seq
+        if last_event_id is not None:
+            try:
+                start_seq = int(last_event_id)
+            except ValueError as exc:
+                raise validation_error("Last-Event-ID must be a non-negative integer") from exc
+            if start_seq < 0:
+                raise validation_error("Last-Event-ID must be a non-negative integer")
+        # 流开始前完成权限/存在性校验：越权与缺失以标准 JSON 错误返回（而非流内帧）
+        await run_service.get_run_detail(session, run_id, scope)
+        generator = sse.stream_run_events(
+            get_session_factory(), settings, run_id, last_seq=start_seq
+        )
+        return StreamingResponse(
+            generator,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
     data = await run_service.list_run_events(
         session, settings, run_id, scope, after_seq=after_seq, limit=limit
     )

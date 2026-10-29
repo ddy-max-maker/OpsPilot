@@ -35,6 +35,8 @@ class User(Base, TimestampMixin):
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # D6：JWT 服务端失效——改密时更新 token_jti，仅匹配 jti 的 token 有效
+    token_jti: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Role(Base):

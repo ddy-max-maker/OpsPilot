@@ -120,6 +120,13 @@ class Settings(BaseSettings):
     # 基础设施兜底：容器名前缀白名单（allowlist 之外一律拒绝；
     # 与应用层 environment 字段相互独立——ops-action 容器自身权限即演示环境）
     action_container_name_prefix: str = "opspilot-demo-"
+    # 安全门禁（D6）：真实动作执行默认关闭。ops-action 挂载的 docker.sock
+    # 属于高权限凭据，应用层 allowlist 不等于基础设施级隔离；仅在专用隔离
+    # 演示 Daemon（ACTION_DOCKER_SOCKET 指向独立 daemon）且明确开启时才允许
+    # 真实执行。安全边界说明见 docs/SECURITY_ACCEPTANCE.md。
+    action_execution_enabled: bool = False
+    # 受控恢复专用 Docker socket（默认容器内 UDS；可指向独立演示 Daemon）
+    action_docker_socket: str | None = None
     # 幂等账本收敛：claimed 超过该时长仍无结果的执行按崩溃处理（启动扫描 + 周期扫描）
     idempotency_claim_timeout_seconds: int = 600
     # 恢复验证：观察窗口总时长 / 探测间隔 / 窗口内需连续通过的探测次数
@@ -131,6 +138,12 @@ class Settings(BaseSettings):
     # 审批链路时效：提案等待审批窗口 / 审批通过后的可执行窗口
     proposal_ttl_seconds: int = 3600
     approval_execution_window_seconds: int = 1800
+
+    # ===== D6：SSE 实时诊断事件流（GET /runs/{id}/events 显式协商）=====
+    # 事件源为 PostgreSQL run_events 轮询；心跳为传输层注释，不产生伪造业务事件。
+    sse_poll_interval_seconds: float = 0.5
+    sse_heartbeat_seconds: float = 15.0
+    sse_max_stream_seconds: int = 600
 
     @property
     def agent_api_key(self) -> str | None:

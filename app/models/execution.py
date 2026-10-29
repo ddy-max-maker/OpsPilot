@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -136,6 +137,7 @@ class VerificationResult(Base, CreatedOnlyMixin):
             "status IN ('in_progress','passed','failed','unknown')", name="status_valid"
         ),
         Index("ix_verification_results_execution_id", "execution_id"),
+        UniqueConstraint("execution_id", name="uq_verification_execution"),
     )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)

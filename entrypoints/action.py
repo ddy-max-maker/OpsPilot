@@ -85,7 +85,14 @@ async def _convergence_loop(
                     settings=settings,
                     executor_id=executor_id,
                 )
-            for r in results:
+                # 场景 E：动作成功但验证未完成的执行 → 只读验证恢复（不重发动作）
+                resumed = await convergence.resume_pending_verifications(
+                    session,
+                    session_factory,
+                    settings=settings,
+                    executor_id=executor_id,
+                )
+            for r in results + resumed:
                 logger.warning("crash convergence: %s -> %s", r["execution_id"], r["action"])
         except Exception:  # noqa: BLE001 — 收敛失败不终止进程
             logger.exception("convergence scan failed")
@@ -115,12 +122,15 @@ async def main() -> None:
     executor_id = settings.action_executor_id or "ops-action"
     logger.info("ops-action starting (executor=%s)", executor_id)
 
-    # ---- 启动收敛扫描（崩溃后恢复：claimed 超时 → unknown，禁止盲目重试）----
+    # ---- 启动收敛扫描（崩溃后恢复：claimed 超时 → unknown；验证缺失 → 只读恢复）----
     async with session_factory() as session:
         results = await convergence.converge_stale_claims(
             session, session_factory, settings=settings, executor_id=executor_id
         )
-    for r in results:
+        resumed = await convergence.resume_pending_verifications(
+            session, session_factory, settings=settings, executor_id=executor_id
+        )
+    for r in results + resumed:
         logger.warning("startup convergence: %s -> %s", r["execution_id"], r["action"])
 
     connection = await aio_pika.connect_robust(settings.rabbitmq_url)

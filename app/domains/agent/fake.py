@@ -29,6 +29,12 @@ _TOOL_PLAN = (
     ("read_mysql_diagnostics", ("database",)),
 )
 
+# D6 评估：full 剖面在健康检查后加入可观测性取证（指标/链路；跨服务根因场景）
+_OBSERVABILITY_STEPS = (
+    ("query_metrics", None),
+    ("query_traces", None),
+)
+
 # D4：RAG 开启时前置知识检索步骤（确定性验证知识工具链路 + 证据语义）
 _KNOWLEDGE_STEPS = (
     ("retrieve_incidents", None),
@@ -51,6 +57,8 @@ class FakeDiagnoserChatModel(BaseChatModel):
     model_name: str = "fake-diagnoser"
     # D4：RAG 开启时（Worker 按设置注入）前置知识检索步骤；默认关闭保持 D2/D3 计划
     include_knowledge_steps: bool = False
+    # D6 评估：full 剖面加入指标/链路取证步骤（默认 default 保持既有确定性计划）
+    plan_profile: str = "default"
 
     @property
     def _llm_type(self) -> str:
@@ -80,7 +88,10 @@ class FakeDiagnoserChatModel(BaseChatModel):
         plan: list[tuple[str, tuple[str, ...] | None]] = []
         if self.include_knowledge_steps:
             plan.extend(_KNOWLEDGE_STEPS)
-        plan.extend(_TOOL_PLAN)
+        plan.extend(_TOOL_PLAN[:1])
+        if self.plan_profile == "full":
+            plan.extend(_OBSERVABILITY_STEPS)
+        plan.extend(_TOOL_PLAN[1:])
         steps = [
             name for name, applicable in plan if applicable is None or asset_type in applicable
         ]
@@ -94,6 +105,9 @@ class FakeDiagnoserChatModel(BaseChatModel):
             args: dict[str, Any] = {"asset_id": asset_id}
             if tool_name == "retrieve_incidents" or tool_name == "search_runbooks":
                 args = {"query": knowledge_query, "limit": 3}
+            elif tool_name == "query_metrics":
+                # 模板名固定 "up"（评估场景的 prom 实例白名单含该键）
+                args["template"] = "up"
             message = AIMessage(
                 content=f"（fake 计划第 {ai_calls + 1}/{len(steps)} 步）",
                 tool_calls=[
@@ -139,6 +153,7 @@ def _synthesize_report(*, incident_id: str, tool_messages: list[ToolMessage]) ->
 
     hypotheses: list[dict[str, Any]] = []
     rank = 0
+    # 主假设来源：真实失败的探测（status != ok）
     for obs in observations:
         if obs.get("status") != "ok":
             rank += 1
@@ -151,6 +166,23 @@ def _synthesize_report(*, incident_id: str, tool_messages: list[ToolMessage]) ->
                     "contradicting_evidence_ids": [],
                     "missing_information": [],
                     "confidence": "medium",
+                }
+            )
+    # 次级假设来源：探测成功但载荷携带 anomaly 异常标记（链路/指标级故障，
+    # 如下游依赖错误 span——由真实证据文本驱动，不凭空推断）
+    for obs in observations:
+        summary = str(obs.get("summary_redacted", ""))
+        if obs.get("status") == "ok" and "anomaly=" in summary:
+            rank += 1
+            hypotheses.append(
+                {
+                    "rank": rank,
+                    "statement": f"观测异常（依赖/指标标记）：{summary[:160]}",
+                    "status": "supported",
+                    "supporting_evidence_ids": [obs["evidence_id"]],
+                    "contradicting_evidence_ids": [],
+                    "missing_information": [],
+                    "confidence": "low",
                 }
             )
     is_unknown = not observations

@@ -41,6 +41,10 @@ os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = ADMIN_BOOT_PASSWORD
 # D4：测试一律用确定性 Fake Embedding（不联网下载模型）；RAG 相关测试按需覆盖
 os.environ.setdefault("EMBEDDING_PROVIDER", "fake")
+# D6：SSE 测试加速（轮询/心跳/总时长取测试级小值，不改变语义）
+os.environ.setdefault("SSE_POLL_INTERVAL_SECONDS", "0.05")
+os.environ.setdefault("SSE_HEARTBEAT_SECONDS", "0.3")
+os.environ.setdefault("SSE_MAX_STREAM_SECONDS", "10")
 
 # ---- 2. 导入 app（Settings 以测试环境变量缓存）----
 import httpx  # noqa: E402
@@ -66,7 +70,8 @@ ALL_TABLES = (
     "capability_manifests, capability_test_runs, asset_observability_bindings, "
     "knowledge_documents, knowledge_versions, knowledge_chunks, knowledge_embeddings, "
     "retrieval_events, runbooks, runbook_versions, "
-    "proposals, approvals, action_executions, action_idempotency, verification_results"
+    "proposals, approvals, action_executions, action_idempotency, verification_results, "
+    "evaluation_suites, evaluation_cases, evaluation_runs, evaluation_results"
 )
 
 
@@ -148,17 +153,24 @@ async def clean_db(db_engine) -> None:
 
 
 @pytest.fixture
-async def client(clean_db) -> AsyncIterator[httpx.AsyncClient]:
-    """每个测试独立 ASGI app：lifespan 初始化引擎并重新执行 bootstrap。"""
+async def app(clean_db) -> AsyncIterator:
+    """每个测试独立 ASGI app：lifespan 初始化引擎并重新执行 bootstrap。
+
+    独立暴露 app 供 SSE 等流式场景直接驱动 ASGI（httpx ASGITransport 会
+    全量缓冲响应体，无法观测增量推送）。
+    """
     from app.main import create_app
 
     application = create_app()
     async with application.router.lifespan_context(application):
-        transport = httpx.ASGITransport(app=application)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as async_client:
-            yield async_client
+        yield application
+
+
+@pytest.fixture
+async def client(app) -> AsyncIterator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+        yield async_client
 
 
 async def api_login(client: httpx.AsyncClient, username: str, password: str) -> httpx.Response:
@@ -174,7 +186,10 @@ def auth_headers(token: str) -> dict[str, str]:
 
 @pytest.fixture
 async def ready_admin(client) -> dict[str, str]:
-    """已通过首登改密的 Admin 请求头（业务可用状态）。"""
+    """已通过首登改密的 Admin 请求头（业务可用状态）。
+
+    D6：改密后旧 JWT 被服务端失效，改密响应携带重新签发的新 token。
+    """
     resp = await api_login(client, ADMIN_BOOT_USERNAME, ADMIN_BOOT_PASSWORD)
     assert resp.status_code == 200, resp.text
     token = resp.json()["data"]["access_token"]
@@ -184,7 +199,8 @@ async def ready_admin(client) -> dict[str, str]:
         headers=auth_headers(token),
     )
     assert change.status_code == 200, change.text
-    return auth_headers(token)
+    # 改密后旧 token 失效：使用响应中重新签发的新 token
+    return auth_headers(change.json()["data"]["access_token"])
 
 
 async def create_test_user(
@@ -253,3 +269,25 @@ async def viewer_headers(client, db_session_factory) -> dict[str, str]:
     resp = await api_login(client, "viewer1", "Viewer123!")
     assert resp.status_code == 200, resp.text
     return auth_headers(resp.json()["data"]["access_token"])
+
+
+@pytest.fixture
+async def demo_world(db_session_factory, client) -> dict[str, str]:
+    """D5/D6 共用演示世界：双用户 + 资产（容器绑定）+ 事件 + run + 已发布 Runbook。"""
+    from sqlalchemy import text
+
+    from tests.integration.test_approvals import _seed_world
+
+    w = await _seed_world(db_session_factory)
+    async with db_session_factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT id FROM runbook_versions WHERE runbook_id IN "
+                    "(SELECT id FROM runbooks WHERE name = 'D5 Redis 受控重启') "
+                    "AND status = 'published' ORDER BY version_no DESC LIMIT 1"
+                )
+            )
+        ).scalar_one()
+    w["rbv_id"] = str(row)
+    return w

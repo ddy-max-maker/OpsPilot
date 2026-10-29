@@ -58,7 +58,7 @@ async def login(
         raise invalid
     if not verify_password(user.password_hash, password):
         raise invalid
-    token, expires_in = create_access_token(
+    token, expires_in, _jti = create_access_token(
         user.id, settings.jwt_secret, settings.access_token_expire_minutes
     )
     await audit_service.record(
@@ -76,8 +76,8 @@ async def login(
 
 async def change_password(
     session: AsyncSession, settings: Settings, user: User, old_password: str, new_password: str
-) -> User:
-    """修改自身密码；成功后清除 must_change_password。
+) -> tuple[User, str, int]:
+    """修改自身密码；成功后清除 must_change_password 并签发新 token（旧 token 失效）。
 
     事务边界：校验 + 更新 + 审计 + 提交在本函数内完成。
     """
@@ -91,6 +91,13 @@ async def change_password(
         raise validation_error("new password must differ from the old password")
     user.password_hash = hash_password(new_password)
     user.must_change_password = False
+    # D6：JWT 服务端失效——改密时绑定新 token 的 jti；旧 token（jti 不匹配）即刻作废。
+    new_password_hash = hash_password(new_password)
+    user.password_hash = new_password_hash
+    access_token, expires_in, new_jti = create_access_token(
+        user.id, settings.jwt_secret, settings.access_token_expire_minutes
+    )
+    user.token_jti = new_jti
     session.add(user)
     await audit_service.record(
         session,
@@ -106,7 +113,7 @@ async def change_password(
         await session.rollback()
         raise conflict_state("password change failed due to state conflict") from exc
     await session.refresh(user)
-    return user
+    return user, access_token, expires_in
 
 
 async def ensure_roles(session: AsyncSession) -> None:

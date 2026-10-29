@@ -33,19 +33,22 @@ def verify_password(password_hash: str, plain: str) -> bool:
         return False
 
 
-def create_access_token(subject: str, secret: str, expires_minutes: int) -> tuple[str, int]:
-    """签发 HS256 access token，返回 (token, expires_in 秒)。"""
+def create_access_token(
+    subject: str, secret: str, expires_minutes: int
+) -> tuple[str, int, str]:
+    """签发 HS256 access token，返回 (token, expires_in 秒, jti)。"""
     now = datetime.now(UTC)
     expires_delta = timedelta(minutes=expires_minutes)
+    jti = uuid.uuid4().hex
     payload: dict[str, Any] = {
         "sub": subject,
         "type": ACCESS_TOKEN_TYPE,
         "iat": int(now.timestamp()),
         "exp": now + expires_delta,
-        "jti": uuid.uuid4().hex,
+        "jti": jti,
     }
     token = jwt.encode(payload, secret, algorithm=_ALGORITHM)
-    return token, int(expires_delta.total_seconds())
+    return token, int(expires_delta.total_seconds()), jti
 
 
 class TokenValidationError(Exception):

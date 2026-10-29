@@ -75,12 +75,15 @@ async def change_password(
     settings: SettingsDep,
     current: CurrentUserDep,
 ) -> Envelope[ChangePasswordData]:
-    """修改自身密码：校验旧密码，成功后清除 must_change_password。"""
-    await auth_service.change_password(
+    """修改自身密码：校验旧密码，成功后清除 must_change_password。
+
+    D6：旧 token 即刻失效，响应携带重新签发的新 access_token。
+    """
+    _, access_token, expires_in = await auth_service.change_password(
         session,
         settings,
         current.user,
         body.old_password,
         body.new_password,
     )
-    return ok(ChangePasswordData())
+    return ok(ChangePasswordData(access_token=access_token, expires_in=expires_in))

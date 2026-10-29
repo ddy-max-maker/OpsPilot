@@ -1,10 +1,19 @@
-"""恢复验证服务（D5，用户指令 §6）：动作成功 ≠ 故障恢复成功。
+"""恢复验证服务（D5 → D6 加固）：动作成功 ≠ 故障恢复成功。
+
+D6 加固点：
+- 执行输入来自消费侧 DB 导出上下文（context），不信任任何消息字段；
+- 验证记录幂等：同一 execution 至多一条记录（UNIQUE 兜底 + 认领检查），
+  多消费者/重启重入不会重复写入或重发副作用动作；
+- 完整观察窗口：窗口期内持续取样（不以"早期连续健康"提前宣布恢复），
+  仅当已观测到失败/不可观测时提前结束（失败是确定性结论）；
+- 崩溃恢复：succeeded/executed 但验证缺失时，由收敛扫描重新执行只读验证
+  （不重发有副作用动作）。
 
 流程（executed 之后由 ops-action 触发）：
 1. 配置化探测：目标资产 endpoints.health_check 决定探测方式
    （redis_ping / http_health），未配置探测方式的动作不做验证（记录 unknown）；
-2. 观察窗口：window_seconds 内按 probe_interval 连续探测；
-3. 判定：全部探测通过且连续通过次数 ≥ min_passing_probes → PASSED；
+2. 观察窗口：window_seconds 内按 probe_interval 持续探测；
+3. 判定：窗口内全部探测通过且通过次数 ≥ min_passing_probes → PASSED；
    任一探测失败 → FAILED（S9 红线：动作成功但服务不健康绝不 RESOLVED）；
    探测不可执行/无法观测 → UNKNOWN；
 4. 落库 verification_results 并由 approvals_service.record_verification
@@ -19,13 +28,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.core.enums import ActorType
 from app.domains.approvals import service as approvals_service
 from app.domains.audit import service as audit_service
-from app.models import Asset, Proposal, VerificationStatus
+from app.models import Asset, Proposal, VerificationResult, VerificationStatus
 
 logger = logging.getLogger("ops-action.verification")
 
@@ -60,15 +70,19 @@ async def _run_observation_window(
     *,
     settings: Settings,
 ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
-    """观察窗口内的连续健康判断（真实探测；返回判定/探测记录/窗口元数据）。"""
+    """完整观察窗口（D6）：窗口期内持续取样，不以早期连续健康提前结束。
+
+    - 窗口结束前持续探测（先健康后失败的情形会被捕获，不误报成功）；
+    - 仅当已观测到失败或不可观测时提前结束（结论已确定性）；
+    - 判定：全部通过且通过数 ≥ min_passing_probes → PASSED。
+    """
     started = time.monotonic()
     started_at = datetime.now(UTC)
     window_seconds = settings.verification_observation_window_seconds
     interval = settings.verification_probe_interval_seconds
     min_passing = settings.verification_min_passing_probes
     probes: list[dict[str, Any]] = []
-    consecutive_passes = 0
-    max_consecutive = 0
+    passing = 0
     any_failure = False
     any_unobservable = False
     while (time.monotonic() - started) < window_seconds:
@@ -86,10 +100,8 @@ async def _run_observation_window(
                 }
             )
             if ok:
-                consecutive_passes += 1
-                max_consecutive = max(max_consecutive, consecutive_passes)
+                passing += 1
             else:
-                consecutive_passes = 0
                 any_failure = True
         except Exception as exc:  # noqa: BLE001 — 探测不可观测（网络/配置问题）
             probes.append(
@@ -100,10 +112,9 @@ async def _run_observation_window(
                     "error": f"{type(exc).__name__}: {exc}",
                 }
             )
-            consecutive_passes = 0
             any_unobservable = True
-        # 连续通过数已达标且无任何失败：可提前结束（窗口证据充分）
-        if max_consecutive >= min_passing and not any_failure and not any_unobservable:
+        # 失败/不可观测是确定性结论：提前结束（不继续消耗窗口）
+        if any_failure or any_unobservable:
             break
         await _sleep(interval)
     ended_at = datetime.now(UTC)
@@ -112,7 +123,7 @@ async def _run_observation_window(
         status = VerificationStatus.UNKNOWN
     elif any_failure:
         status = VerificationStatus.FAILED
-    elif max_consecutive >= min_passing and len(probes) >= min_passing:
+    elif passing >= min_passing and len(probes) >= min_passing:
         status = VerificationStatus.PASSED
     else:
         # 窗口结束仍未达标（样本不足且无失败）→ 保守 UNKNOWN
@@ -124,9 +135,9 @@ async def _run_observation_window(
         "window_seconds": window_seconds,
         "probe_interval_seconds": interval,
         "min_passing_probes": min_passing,
-        "max_consecutive_passes": max_consecutive,
+        "passing_probes": passing,
     }
-    return status, probes, window
+    return str(status), probes, window
 
 
 async def _sleep(seconds: float) -> None:
@@ -142,20 +153,55 @@ def _health_check_for(asset: Asset | None) -> dict[str, Any] | None:
     return dict(check) if isinstance(check, dict) else None
 
 
+async def _load_concluded_verification(
+    session: AsyncSession, execution_id: str
+) -> VerificationResult | None:
+    """查询已结论的验证记录（幂等：同一 execution 至多一条最终记录）。"""
+    rows = (
+        (
+            await session.execute(
+                select(VerificationResult)
+                .where(
+                    VerificationResult.execution_id == execution_id,
+                    VerificationResult.status != VerificationStatus.IN_PROGRESS,
+                )
+                .limit(1)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return rows[0] if rows else None
+
+
 async def verify_execution(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     execution_id: str,
     proposal: Proposal,
-    payload: dict[str, Any],
+    context: dict[str, Any],
     executor_id: str,
     settings: Settings,
 ) -> str:
-    """执行成功后的恢复验证入口（真实探测 + 观察窗口 + 状态机推进）。"""
-    # 操作前状态确认：执行请求携带的前置检查证据（executor 已校验容器 running）
+    """执行成功后的恢复验证入口（真实探测 + 完整观察窗口 + 状态机推进）。
+
+    幂等：已有结论记录时直接返回（重启重入/多消费者不重复写入、不重发动作）。
+    """
+    # 并发认领/幂等检查：已结论 → 跳过
+    async with session_factory() as session:
+        existing = await _load_concluded_verification(session, execution_id)
+    if existing is not None:
+        logger.info(
+            "verification for execution %s already concluded (%s); skip",
+            execution_id,
+            existing.status,
+        )
+        return str(existing.status)
+
+    # 操作前状态确认：消费侧 DB 导出上下文（执行器已核对容器存在性）
     precheck_ref = {
-        "container_running_confirmed_at": payload.get("requested_at"),
-        "container": (payload.get("parameters") or {}).get("container_name"),
+        "container_running_confirmed_at": context.get("requested_at"),
+        "container": context.get("container_name"),
     }
     async with session_factory() as session:
         asset = await session.get(Asset, proposal.target_asset_id)
@@ -205,7 +251,7 @@ async def verify_execution(
         0,
         {
             "name": "pre_state_confirmed",
-            "expected": "container running before restart",
+            "expected": "container identity bound on asset",
             "observed": precheck_ref.get("container_running_confirmed_at"),
             "pass": True,
         },

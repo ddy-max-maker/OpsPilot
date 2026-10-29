@@ -133,16 +133,17 @@ def _validate_value(key: str, value: object, prop: dict[str, object]) -> list[st
 def resolve_container_name(
     parameters: dict[str, object], asset_endpoints: dict[str, object] | None
 ) -> str | None:
-    """解析执行目标容器名：参数显式声明优先，其次资产 endpoints 登记。
+    """解析执行目标容器名（D6 加固：资产登记为唯一权威）。
 
-    目标身份必须与登记一致（资产↔容器精确绑定；不能凭空指定容器）。
+    - 资产 endpoints 未登记 container_name → 返回 None（无登记容器身份的
+      资产不能仅凭请求/消息中的容器名称进入执行）；
+    - 参数显式声明 container_name 时必须与登记一致（否则 None）；
+    - 登记值是唯一被执行器使用的目标。
     """
-    from_params = parameters.get("container_name")
     from_asset = (asset_endpoints or {}).get("container_name")
-    if isinstance(from_params, str) and isinstance(from_asset, str):
-        return from_params if from_params == from_asset else None
-    if isinstance(from_params, str):
-        return from_params
-    if isinstance(from_asset, str):
-        return from_asset
-    return None
+    if not isinstance(from_asset, str) or not from_asset:
+        return None
+    from_params = parameters.get("container_name")
+    if isinstance(from_params, str) and from_params != from_asset:
+        return None
+    return from_asset

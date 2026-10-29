@@ -54,6 +54,9 @@ async def get_current_user(
     user = await repository.get_user_by_id(session, str(payload.get("sub", "")))
     if user is None or not user.is_active:
         raise unauthenticated("invalid or expired token")
+    # D6：服务端失效校验——改密后仅匹配 token_jti 的 token 有效（旧 JWT 即刻作废）
+    if user.token_jti is not None and payload.get("jti") != user.token_jti:
+        raise unauthenticated("invalid or expired token")
     role_codes = await auth_service.user_role_codes(session, user.id)
     return CurrentUser(user=user, role_codes=role_codes)
 
