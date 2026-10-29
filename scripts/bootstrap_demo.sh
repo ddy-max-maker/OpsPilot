@@ -37,8 +37,10 @@ echo "[bootstrap] 1/4 构建并启动核心栈（postgres/api/web/worker/rabbitm
 docker compose up -d --build
 
 echo "[bootstrap] 2/4 等待 API ready（首次需等迁移完成）"
+# --noproxy '*'：宿主机若配置了 HTTP_PROXY 且 NO_PROXY 不含 127.0.0.1，
+# curl 会把本地探测也交给代理并拿到 502，导致就绪判断永远失败
 for i in $(seq 1 90); do
-  if curl -sf http://localhost:8000/api/v1/health/ready >/dev/null 2>&1; then
+  if curl -sf --noproxy '*' http://localhost:8000/api/v1/health/ready >/dev/null 2>&1; then
     echo "[bootstrap] API ready（${i} 次探测）"
     break
   fi

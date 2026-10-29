@@ -35,9 +35,15 @@ Write-Host "[bootstrap] 2/4 等待 API ready（首次需等迁移完成）"
 $ready = $false
 for ($i = 1; $i -le 90; $i++) {
     try {
-        $resp = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 `
-            -Uri "http://localhost:8000/api/v1/health/ready" -ErrorAction Stop
-        if ($resp.StatusCode -eq 200) { $ready = $true; Write-Host "[bootstrap] API ready（$i 次探测）"; break }
+        # 显式禁用代理：宿主机若配了 HTTP_PROXY 且 NO_PROXY 不含 127.0.0.1，
+        # Invoke-WebRequest 会把本地探测交给代理并拿到 502
+        $req = [System.Net.HttpWebRequest]::Create("http://localhost:8000/api/v1/health/ready")
+        $req.Proxy = $null
+        $req.Timeout = 3000
+        $resp = $req.GetResponse()
+        $code = [int]$resp.StatusCode
+        $resp.Close()
+        if ($code -eq 200) { $ready = $true; Write-Host "[bootstrap] API ready（$i 次探测）"; break }
     } catch { Start-Sleep -Seconds 2 }
 }
 if (-not $ready) { throw "API 180s 内未就绪，请查看：docker compose logs api" }
