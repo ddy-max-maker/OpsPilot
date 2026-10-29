@@ -36,9 +36,10 @@ ASSETS = [
         "sandbox",
         "cache",
         {
+            # AssetEndpoints 为 extra="forbid"：只能用 health_url/metrics_ref/logs_ref/
+            # container_name/health_check，多写字段会让资产列表响应校验 500
             "container_name": "opspilot-demo-redis",
-            "host": "opspilot-demo-redis",
-            "port": 6379,
+            "health_check": {"kind": "redis_ping", "host": "opspilot-demo-redis", "port": 6379},
         },
     ),
 ]
