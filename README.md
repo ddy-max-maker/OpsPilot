@@ -18,7 +18,7 @@
 | 全量测试 | **347 passed / 3 skipped** | `uv run pytest`（真实 PostgreSQL，非 mock） |
 | 确定性评估 | **39/39**（4 套件：fault-core 12 / security-gates 13 / rag-ablation 6 / reliability-recovery 8） | `docs/eval/fake_ci_report_judge_v2.json` |
 | 真实模型评估 | **固定案例规则通过率 10/10**（`deepseek-chat` + 确定性 stub，judge-v2） | [EVALUATION_REPORT.md](docs/EVALUATION_REPORT.md) |
-| 浏览器 E2E | **7/7**（Playwright 真实点击，29.3s） | `web/console/e2e` |
+| 浏览器 E2E | **8/8**（Playwright 真实点击，24.6s） | `web/console/e2e` |
 | 干净环境 | 克隆 → 首次诊断 **约 45 秒** | [DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) §6 |
 | CI | GitHub Actions 全绿（lint / mypy / pytest / 39 例评估 / 前端构建 / 浏览器 E2E） | `.github/workflows/` |
 
@@ -191,6 +191,7 @@ OpsPilot-Next/
 | 踩过哪些坑、怎么定位的 | [FAILURE_POSTMORTEMS.md](docs/FAILURE_POSTMORTEMS.md) |
 | 看界面长什么样 | [docs/screenshots/](docs/screenshots/)（真实栈采集，含证据链与审批门禁） |
 | 准备面试 / 答辩 | [interview_notes.md](docs/interview_notes.md)（25 个追问，全部锚到源码） |
+| 这一版交付了什么、边界在哪 | [RELEASE_NOTES.md](docs/RELEASE_NOTES.md) · [D7-DELIVERY.md](docs/D7-DELIVERY.md) |
 | 设计阶段冻结契约 | [PRD.md](docs/PRD.md) · [CONTRACTS.md](docs/CONTRACTS.md) · [DATA_MODEL.md](docs/DATA_MODEL.md) · [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) |
 
 ---
@@ -200,7 +201,7 @@ OpsPilot-Next/
 ```bash
 make test          # 全量（约 4 分钟，需先 docker compose up -d postgres）
 make eval-39       # 39 例确定性评估
-make e2e           # Playwright 7 例
+make e2e           # Playwright 8 例
 make lint typecheck
 ```
 

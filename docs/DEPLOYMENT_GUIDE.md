@@ -123,7 +123,7 @@ make seed             # 资产与账号（幂等）
 make knowledge        # 8 篇历史知识（幂等，需 RAG_MODE!=off）
 make test             # 全量 pytest（约 4 分钟）
 make eval-39          # 39 例确定性评估
-make e2e              # Playwright 浏览器 E2E（7 例）
+make e2e              # Playwright 浏览器 E2E（8 例）
 make lint / make typecheck / make format
 ```
 
