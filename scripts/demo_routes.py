@@ -348,6 +348,57 @@ def route_b(client: _Client) -> None:
     print_evidence_and_report(client, operator, run_id, run)
 
 
+DEMO_RUNBOOK_NAME = "D7 演示 Redis 受控重启"
+DEMO_ACTION_KEY = "restart_container@v1"
+
+
+def ensure_published_runbook(client: _Client, admin: dict[str, str]) -> str:
+    """返回一条已发布、可执行 restart_container@v1 的 Runbook 版本 id。
+
+    幂等自举：干净环境（只有 seed_demo，没跑过 D5 演示）也能直接演示路线 C，
+    无需先执行 scripts/demo_d5.py prepare。若已有匹配的已发布版本则直接复用。
+    """
+    rbs = client.get(f"{API}/runbooks", headers=admin).json()["data"]["runbooks"]
+    for rb in rbs:
+        for v in rb.get("versions", []):
+            if v["status"] != "published":
+                continue
+            if DEMO_ACTION_KEY not in (v.get("allowlist_action_keys") or []):
+                continue
+            p(
+                "C",
+                f"复用 Runbook {rb['name']} v{v['version_no']}"
+                f"（published，风险 {rb['risk_level']}）",
+            )
+            return str(v["id"])
+
+    # 无可用版本 → 以 admin 身份创建并发布（与服务端强校验保持一致：
+    # 动作规格 restart_container@v1 为 r1，Runbook 风险等级必须同为 r1）
+    p("C", "无可用已发布 Runbook：自举创建并发布演示用 Runbook")
+    created = client.post(
+        f"{API}/runbooks",
+        headers=admin,
+        json_body={
+            "name": DEMO_RUNBOOK_NAME,
+            "description": "sandbox 演示容器受控重启（allowlist：restart_container@v1）",
+            "risk_level": "r1",
+            "steps": [
+                {"action": "restart_container", "params": {"container_name": TARGET_CONTAINER}}
+            ],
+            "allowed_environments": ["sandbox"],
+            "allowlist_action_keys": [DEMO_ACTION_KEY],
+        },
+    )
+    if created.status_code != 201:
+        raise SystemExit(f"创建 Runbook 失败 {created.status_code}: {created.text[:300]}")
+    body = created.json()["data"]
+    published = client.post(f"{API}/runbooks/versions/{body['version_id']}/publish", headers=admin)
+    if published.status_code != 200:
+        raise SystemExit(f"发布 Runbook 失败 {published.status_code}: {published.text[:300]}")
+    p("C", f"Runbook {DEMO_RUNBOOK_NAME} v1 已发布（version_id={body['version_id']}）")
+    return str(body["version_id"])
+
+
 def route_c(client: _Client, run_id: str | None) -> None:
     print("\n=== 路线 C：Proposal → 四眼审批 → sandbox 执行门禁 → 恢复验证 ===", flush=True)
     admin = login(client, "e2e_admin")
@@ -367,23 +418,8 @@ def route_c(client: _Client, run_id: str | None) -> None:
         )
         wait_run(client, operator, run_id)
 
-    # 1. 已发布的 Runbook（草稿不可执行）
-    rbs = client.get(f"{API}/runbooks", headers=admin).json()["data"]["runbooks"]
-    version_id = None
-    for rb in rbs:
-        for v in rb.get("versions", []):
-            if v["status"] == "published":
-                version_id = v["id"]
-                p(
-                    "C",
-                    f"Runbook {rb['name']} v{v['version_no']}"
-                    f"（published，风险 {rb['risk_level']}）",
-                )
-                break
-        if version_id:
-            break
-    if not version_id:
-        raise SystemExit("没有已发布 Runbook：请先执行 python scripts/demo_d5.py prepare")
+    # 1. 已发布的 Runbook（草稿不可执行；缺失时自举，保证干净环境可跑）
+    version_id = ensure_published_runbook(client, admin)
 
     asset_id, container = find_asset(client, operator)
     stamp = int(time.time())
