@@ -1,0 +1,133 @@
+# D6 增量验证：评估报告产物 + 前端构建 + 浏览器 E2E
+# 与 ci.yml（后端主门禁）并行；真实 DeepSeek 评估不在 CI 执行、不读取私人 Key
+name: d6
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  eval-report:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: opspilot
+          POSTGRES_PASSWORD: opspilot
+          POSTGRES_DB: opspilot_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U opspilot"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: 安装依赖
+        run: uv sync --frozen
+      - name: 迁移建 schema
+        env:
+          DATABASE_URL: postgresql+asyncpg://opspilot:opspilot@127.0.0.1:5432/opspilot_test
+        run: uv run alembic upgrade head
+      - name: 39 个确定性评估案例自动执行 + 报告保存
+        env:
+          DATABASE_URL: postgresql+asyncpg://opspilot:opspilot@127.0.0.1:5432/opspilot_test
+        run: uv run python scripts/eval_fake_report.py --out docs/eval/fake_ci_report.json
+      - name: 上传评估报告产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: docs/eval/fake_ci_report.json
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/console/package-lock.json
+      - name: 安装锁定依赖
+        run: npm ci --no-audit --no-fund
+      - name: TypeScript 类型检查
+        run: npx vue-tsc --noEmit
+      - name: 正式构建
+        run: npx vite build
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: opspilot
+          POSTGRES_PASSWORD: opspilot
+          POSTGRES_DB: opspilot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U opspilot"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      rabbitmq:
+        image: rabbitmq:3.13-management
+        env:
+          RABBITMQ_DEFAULT_USER: opspilot
+          RABBITMQ_DEFAULT_PASS: opspilot
+        ports: ["5672:5672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://opspilot:opspilot@127.0.0.1:5432/opspilot
+      JWT_SECRET: ci-e2e-jwt-secret-not-for-production
+      WEBHOOK_ALERTS_SECRET: ci-e2e-webhook-secret
+      RABBITMQ_URL: amqp://opspilot:opspilot@127.0.0.1:5672/%2F
+      AGENT_PROVIDER: fake
+      AGENT_FAKE_PROVIDER_ENABLED: "true"
+      EMBEDDING_PROVIDER: fake
+      ACTION_EXECUTION_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/console/package-lock.json
+      - name: 安装后端依赖
+        run: uv sync --frozen
+      - name: 迁移建 schema
+        run: uv run alembic upgrade head
+      - name: 种子 E2E 账号
+        run: uv run python scripts/seed_e2e_users.py
+      - name: 启动后端（API + Worker + Action 消费者）
+        run: |
+          uv run uvicorn entrypoints.api:app --host 127.0.0.1 --port 8000 &
+          uv run python -m entrypoints.worker &
+          uv run python -m entrypoints.action &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8000/api/v1/health/ready > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8000/api/v1/health/ready
+      - name: 浏览器 E2E（真实后端；模型为显式开启的确定性 fake provider）
+        working-directory: web/console
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test
+      - name: 上传 E2E 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: web/console/playwright-report/
+          if-no-files-found: ignore

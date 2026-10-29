@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # OpenAI 兼容自定义 API 地址（deepseek 缺省官方 https://api.deepseek.com/v1）
     agent_api_base: str | None = None
     agent_prompt_version: str = "d4-v1"
+    # 允许在运行时直接使用内置确定性 fake 模型（D6：仅 CI/E2E 显式开启；
+    # 默认 False 时 fake provider 仍要求测试侧注入模型，生产不可用）
+    agent_fake_provider_enabled: bool = False
 
     # ---- Run 预算默认值（服务端硬限制，ADR-8；超限强制终止）----
     budget_max_tool_calls: int = 24

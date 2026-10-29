@@ -17,6 +17,7 @@ const busy = ref(new Set<string>());
 const showCreate = ref(false);
 const cForm = ref({
   name: "", description: "", risk_level: "r0", allowed_environments: "sandbox,staging",
+  allowlist_action_keys: "restart_container@v1",
   steps_json: '[\n  {"action_key": "docker.restart_container", "args": {"container": "<container_name>"}}\n]',
 });
 const busyCreate = ref(false);
@@ -54,6 +55,8 @@ async function create() {
       risk_level: cForm.value.risk_level,
       steps,
       allowed_environments: cForm.value.allowed_environments
+        .split(",").map((s) => s.trim()).filter(Boolean),
+      allowlist_action_keys: cForm.value.allowlist_action_keys
         .split(",").map((s) => s.trim()).filter(Boolean),
     });
     toast("Runbook 已创建（v1 草稿）");
@@ -97,6 +100,7 @@ onMounted(load);
         <select v-model="cForm.risk_level"><option value="r0">r0</option><option value="r1">r1</option></select>
         <label class="f">描述</label><input v-model="cForm.description" />
         <label class="f">允许环境</label><input v-model="cForm.allowed_environments" placeholder="逗号分隔，production 被服务端硬排除" />
+        <label class="f">动作白名单</label><input v-model="cForm.allowlist_action_keys" placeholder="逗号分隔，如 restart_container@v1（空 = 不可执行）" />
         <label class="f">步骤 JSON</label><textarea v-model="cForm.steps_json" class="mono" />
       </div>
       <button class="btn btn-primary" style="margin-top:10px" :disabled="busyCreate" @click="create">

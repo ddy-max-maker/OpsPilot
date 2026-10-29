@@ -1,0 +1,335 @@
+{
+  "status": "completed",
+  "eval_type": "real_model",
+  "provider": "deepseek",
+  "model_name": "deepseek-chat",
+  "model_config": {
+    "provider": "deepseek",
+    "model_name": "deepseek-chat",
+    "prompt_version": "d2-v1",
+    "rag": "off"
+  },
+  "dataset_version": "d6-eval-v2",
+  "dataset_digest": "4f5ca554e6e4ecde",
+  "cases_total": 7,
+  "passed": 1,
+  "failed": 6,
+  "note": "真实模型评估与 Fake 确定性评估严格分离；预期取自 d6-eval-v2 数据集未做任何改写",
+  "results": [
+    {
+      "case_key": "fault_redis_down_refuse",
+      "category": "单服务：Redis 进程不存在（连接拒绝）",
+      "passed": false,
+      "metrics": {
+        "top1_hit": false,
+        "top3_hit": false,
+        "unknown_exit_correct": false,
+        "hypothesis_count": 0,
+        "evidence_total": 9,
+        "knowledge_hits": 0,
+        "knowledge_misuse": 0,
+        "wrong_reference_count": 0,
+        "tool_calls": 10,
+        "latency_ms": 19828,
+        "tokens": "unavailable",
+        "estimated_cost": "unavailable",
+        "rag_retrieval_latency_ms": 0,
+        "security_denied": 0,
+        "repeated_side_effects": 0,
+        "verification_misreport": 0
+      },
+      "detail": {
+        "hypotheses": [],
+        "misled_by": [],
+        "evidence_summaries": [
+          "http.health_check OK: body={\"status\": \"ok\", \"service\": \"/health/eval-cache-a\"}, content_type=application/json, http_status=200",
+          "redis.health unavailable (REDIS_UNAVAILABLE): ConnectionError",
+          "docker.inspect OK: container_id=ctr_eval-cache-a, error=, exit_code=0, finished_at=0001-01-01T00:00:00Z, oom_killed=False, restart_count=0, running=True, starte",
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "docker.logs OK: container_id=ctr_eval-cache-a, logs=[]",
+          "docker.logs OK: container_id=ctr_eval-cache-a, logs=[]",
+          "prometheus.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'prom-ro'",
+          "otel.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'otel'"
+        ],
+        "report_refs_valid": true
+      }
+    },
+    {
+      "case_key": "fault_container_oom_exit",
+      "category": "单服务：容器 OOM 退出（exit 137）且服务失联",
+      "passed": false,
+      "metrics": {
+        "top1_hit": false,
+        "top3_hit": false,
+        "unknown_exit_correct": false,
+        "hypothesis_count": 3,
+        "evidence_total": 8,
+        "knowledge_hits": 0,
+        "knowledge_misuse": 0,
+        "wrong_reference_count": 0,
+        "tool_calls": 8,
+        "latency_ms": 18796,
+        "tokens": "unavailable",
+        "estimated_cost": "unavailable",
+        "rag_retrieval_latency_ms": 0,
+        "security_denied": 0,
+        "repeated_side_effects": 0,
+        "verification_misreport": 0
+      },
+      "detail": {
+        "hypotheses": [
+          {
+            "rank": 1,
+            "status": "insufficient_data",
+            "statement": "eval-cache-c 容器内存使用触及容器内存上限，被内核 OOM killer SIGKILL 终止（exit 137），导致服务中断"
+          },
+          {
+            "rank": 2,
+            "status": "insufficient_data",
+            "statement": "内存涨到上限的具体诱因（容器内存 limit 配置过低、缓存数据量/键值膨胀、未设置 maxmemory 淘汰策略、流量突增或内存泄漏）"
+          },
+          {
+            "rank": 3,
+            "status": "insufficient_data",
+            "statement": "上游依赖（如持久化/后端存储）故障导致内存堆积进而 OOM"
+          }
+        ],
+        "misled_by": [],
+        "evidence_summaries": [
+          "http.health_check error (HTTP_500)",
+          "docker.inspect OK: container_id=ctr_eval-cache-c, error=, exit_code=137, finished_at=2026-10-28T01:00:00Z, oom_killed=True, restart_count=0, running=False, star",
+          "docker.logs OK: container_id=ctr_eval-cache-c, logs=['Fatal: memory limit reached', 'OOM killed']",
+          "redis.health unavailable (REDIS_UNAVAILABLE): ConnectionError",
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "prometheus.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'prom-ro'",
+          "otel.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'otel'"
+        ],
+        "report_refs_valid": true
+      }
+    },
+    {
+      "case_key": "fault_java_stack_503",
+      "category": "跨栈：Java 服务同接口/同链路被诊断（503）",
+      "passed": false,
+      "metrics": {
+        "top1_hit": false,
+        "top3_hit": false,
+        "unknown_exit_correct": false,
+        "hypothesis_count": 0,
+        "evidence_total": 7,
+        "knowledge_hits": 0,
+        "knowledge_misuse": 0,
+        "wrong_reference_count": 0,
+        "tool_calls": 9,
+        "latency_ms": 17171,
+        "tokens": "unavailable",
+        "estimated_cost": "unavailable",
+        "rag_retrieval_latency_ms": 0,
+        "security_denied": 0,
+        "repeated_side_effects": 0,
+        "verification_misreport": 0
+      },
+      "detail": {
+        "hypotheses": [],
+        "misled_by": [],
+        "evidence_summaries": [
+          "http.health_check error (HTTP_503)",
+          "docker.inspect OK: container_id=ctr_eval-java-app, error=, exit_code=0, finished_at=0001-01-01T00:00:00Z, oom_killed=False, restart_count=0, running=True, start",
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "docker.logs OK: container_id=ctr_eval-java-app, logs=[]",
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "otel.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'otel'",
+          "prometheus.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'prom-ro'"
+        ],
+        "report_refs_valid": null
+      }
+    },
+    {
+      "case_key": "fault_mysql_connect_refuse",
+      "category": "MySQL：连接拒绝（凭据已配置、端口未监听）",
+      "passed": false,
+      "metrics": {
+        "top1_hit": false,
+        "top3_hit": false,
+        "unknown_exit_correct": false,
+        "hypothesis_count": 0,
+        "evidence_total": 8,
+        "knowledge_hits": 0,
+        "knowledge_misuse": 0,
+        "wrong_reference_count": 0,
+        "tool_calls": 8,
+        "latency_ms": 17516,
+        "tokens": "unavailable",
+        "estimated_cost": "unavailable",
+        "rag_retrieval_latency_ms": 0,
+        "security_denied": 0,
+        "repeated_side_effects": 0,
+        "verification_misreport": 0
+      },
+      "detail": {
+        "hypotheses": [],
+        "misled_by": [],
+        "evidence_summaries": [
+          "http.health_check OK: body={\"status\": \"ok\", \"service\": \"/health/eval-db-b\"}, content_type=application/json, http_status=200",
+          "docker.inspect OK: container_id=ctr_eval-db-b, error=, exit_code=0, finished_at=0001-01-01T00:00:00Z, oom_killed=False, restart_count=0, running=True, started_a",
+          "docker.logs OK: container_id=ctr_eval-db-b, logs=[]",
+          "mysql.diagnostics unavailable (MYSQL_CONNECT_ERROR): OperationalError",
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "prometheus.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'prom-ro'",
+          "otel.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'otel'"
+        ],
+        "report_refs_valid": true
+      }
+    },
+    {
+      "case_key": "fault_redis_down_timeout",
+      "category": "单服务：Redis 无响应（探测超时）",
+      "passed": false,
+      "metrics": {
+        "top1_hit": false,
+        "top3_hit": false,
+        "unknown_exit_correct": false,
+        "hypothesis_count": 3,
+        "evidence_total": 10,
+        "knowledge_hits": 0,
+        "knowledge_misuse": 0,
+        "wrong_reference_count": 0,
+        "tool_calls": 10,
+        "latency_ms": 22219,
+        "tokens": "unavailable",
+        "estimated_cost": "unavailable",
+        "rag_retrieval_latency_ms": 0,
+        "security_denied": 0,
+        "repeated_side_effects": 0,
+        "verification_misreport": 0
+      },
+      "detail": {
+        "hypotheses": [
+          {
+            "rank": 1,
+            "status": "insufficient_data",
+            "statement": "Redis 服务端对探测命令返回错误应答（ResponseError），可能是配置/认证/ACL 拒绝、命令被禁用（rename-command）、只读副本或 maxmemory 触发写拒绝、或连接指向了错误实例/端口"
+          },
+          {
+            "rank": 2,
+            "status": "insufficient_data",
+            "statement": "Redis 实例未真正监听或端口不通导致探测降级为协议错误（如连接到非 Redis 服务/代理返回非 Redis 协议响应）"
+          },
+          {
+            "rank": 3,
+            "status": "refuted",
+            "statement": "容器/服务进程崩溃或资源耗尽（OOM、被重启）导致 Redis 不可用"
+          }
+        ],
+        "misled_by": [],
+        "evidence_summaries": [
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "docker.logs OK: container_id=ctr_eval-cache-b, logs=[]",
+          "redis.health error (REDIS_ERROR): ResponseError",
+          "http.health_check OK: body={\"status\": \"ok\", \"service\": \"/health/eval-cache-b\"}, content_type=application/json, http_status=200",
+          "redis.health error (REDIS_ERROR): ResponseError",
+          "knowledge.search unavailable (RAG_DISABLED): RAG disabled (rag_mode=off); run executed without knowledge",
+          "docker.logs OK: container_id=ctr_eval-cache-b, logs=[]",
+          "prometheus.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'prom-ro'",
+          "docker.inspect OK: container_id=ctr_eval-cache-b, error=, exit_code=0, finished_at=0001-01-01T00:00:00Z, oom_killed=False, restart_count=0, running=True, starte",
+          "otel.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'otel'"
+        ],
+        "report_refs_valid": true
+      }
+    },
+    {
+      "case_key": "fault_unknown_exit_budget0",
+      "category": "证据不足：工具预算为 0 → 合理未知退出（不编造根因）",
+      "passed": true,
+      "metrics": {
+        "top1_hit": false,
+        "top3_hit": false,
+        "unknown_exit_correct": true,
+        "hypothesis_count": 0,
+        "evidence_total": 0,
+        "knowledge_hits": 0,
+        "knowledge_misuse": 0,
+        "wrong_reference_count": 0,
+        "tool_calls": 0,
+        "latency_ms": 1907,
+        "tokens": "unavailable",
+        "estimated_cost": "unavailable",
+        "rag_retrieval_latency_ms": 0,
+        "security_denied": 0,
+        "repeated_side_effects": 0,
+        "verification_misreport": 0
+      },
+      "detail": {
+        "hypotheses": [],
+        "misled_by": [],
+        "evidence_summaries": [],
+        "report_refs_valid": null
+      }
+    },
+    {
+      "case_key": "rag_hybrid_misleading_resist",
+      "category": "RAG hybrid：误导性知识不被采信",
+      "passed": false,
+      "metrics": {
+        "top1_hit": false,
+        "top3_hit": false,
+        "unknown_exit_correct": false,
+        "hypothesis_count": 4,
+        "evidence_total": 7,
+        "knowledge_hits": 1,
+        "knowledge_misuse": 1,
+        "wrong_reference_count": 0,
+        "tool_calls": 9,
+        "latency_ms": 18344,
+        "tokens": "unavailable",
+        "estimated_cost": "unavailable",
+        "rag_retrieval_latency_ms": 32,
+        "security_denied": 0,
+        "repeated_side_effects": 0,
+        "verification_misreport": 0
+      },
+      "detail": {
+        "hypotheses": [
+          {
+            "rank": 1,
+            "status": "insufficient_data",
+            "statement": "eval-orders-r5 服务进程内部异常（如应用错误、依赖/配置/数据处理失败）导致其 /health 端点返回 HTTP 500；容器本身运行正常"
+          },
+          {
+            "rank": 2,
+            "status": "insufficient_data",
+            "statement": "orders 服务所依赖的下游组件（存储/缓存/上游服务）异常导致健康检查失败"
+          },
+          {
+            "rank": 3,
+            "status": "refuted",
+            "statement": "payments 上游依赖故障导致 orders 返回 500（历史复盘主张），修复方式为重启 payments"
+          },
+          {
+            "rank": 4,
+            "status": "refuted",
+            "statement": "容器崩溃/OOM/重启循环导致服务不可用"
+          }
+        ],
+        "misled_by": [
+          "payments 上游依赖故障导致 orders 返回 500（历史复盘主张），修复方式为重启 payments"
+        ],
+        "evidence_summaries": [
+          "http.health_check error (HTTP_500)",
+          "docker.inspect OK: container_id=ctr_eval-orders-r5, error=, exit_code=0, finished_at=0001-01-01T00:00:00Z, oom_killed=False, restart_count=0, running=True, star",
+          "otel.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'otel'",
+          "knowledge.search OK: hit_count=0, mode=text-only, note=published runbook versions only; drafts are not executable guidance, runbooks=[]",
+          "prometheus.query unavailable (CONNECTOR_NOT_CONFIGURED): no enabled instance for connector 'prom-ro'",
+          "docker.logs OK: container_id=ctr_eval-orders-r5, logs=[]",
+          "knowledge.search OK: hit_count=1, hits=[{'version_id': 'kbv_01m62zb0qt7s1tve8cp6gabp79', 'document_id': 'kb_01m62zb0qt7s1tve8cp6gabp78', 'doc_type': 'postmortem"
+        ],
+        "report_refs_valid": true
+      }
+    }
+  ],
+  "generated_at": "2026-10-29T04:40:40.474644+00:00",
+  "git_commit": "887df8a"
+}

@@ -40,6 +40,10 @@ services:
       # D4：RAG 模式与 Embedding（知识检索 API 侧使用）
       RAG_MODE: ${RAG_MODE:-off}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local_e5}
+      # HuggingFace 访问端点与缓存卷（国内网络经镜像下载；模型缓存跨容器重建保留）
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
     ports:
       - "8000:8000"
     command: sh -c "alembic upgrade head && uvicorn entrypoints.api:app --host 0.0.0.0 --port 8000"
@@ -89,9 +93,12 @@ services:
       # D4：RAG 模式与 Embedding（Agent 知识工具按 RAG_MODE 决定可用性）
       RAG_MODE: ${RAG_MODE:-off}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local_e5}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
       BUDGET_MAX_TOOL_CALLS: ${BUDGET_MAX_TOOL_CALLS:-24}
       BUDGET_DEADLINE_SECONDS: ${BUDGET_DEADLINE_SECONDS:-900}
       WORKER_LEASE_TTL_SECONDS: ${WORKER_LEASE_TTL_SECONDS:-60}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
     command: sh -c "alembic upgrade head && python -m entrypoints.worker"
     restart: unless-stopped
 
@@ -263,3 +270,4 @@ services:
 
 volumes:
   pgdata:
+  hf-cache:

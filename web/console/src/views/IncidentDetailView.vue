@@ -26,8 +26,14 @@ async function load() {
   error.value = null;
   try {
     incident.value = await incidentsApi.get(incidentId);
-    // run 发现：本机启动记录（后端无 runs 列表端点，契约冻结不加新端点）
-    runId.value = localStorage.getItem(`opspilot_run_${incidentId}`);
+    // run 发现：URL ?run= 优先（可分享/跨会话恢复）；其次本机启动记录
+    // （后端无 runs 列表端点，契约冻结不加新端点）
+    const fromQuery = typeof route.query.run === "string" ? route.query.run : "";
+    const fromLocal = localStorage.getItem(`opspilot_run_${incidentId}`);
+    runId.value = fromQuery || fromLocal;
+    if (fromQuery && fromQuery !== fromLocal) {
+      localStorage.setItem(`opspilot_run_${incidentId}`, fromQuery);
+    }
   } catch (e) {
     error.value = errorMessage(e);
   } finally {

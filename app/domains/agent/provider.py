@@ -47,6 +47,15 @@ def build_chat_model(settings: Settings) -> ModelHandle:
         raise ProviderNotConfigured(f"unknown AGENT_PROVIDER '{settings.agent_provider}'") from exc
 
     if provider is AgentProvider.FAKE:
+        if settings.agent_fake_provider_enabled:
+            # D6 CI/E2E 专用：显式开启后运行时可用内置确定性 fake 模型
+            # （agent_fake_provider_enabled 默认 False；生产部署不开启）
+            from app.domains.agent.fake import FakeDiagnoserChatModel  # noqa: PLC0415
+
+            fake_model = FakeDiagnoserChatModel(model_name=settings.agent_model_name)
+            return ModelHandle(
+                fake_model, provider="fake", model_name=settings.agent_model_name
+            )
         raise ProviderNotConfigured(
             "provider 'fake' requires an injected model (tests/demo); "
             "configure AGENT_PROVIDER=anthropic|google|deepseek with credentials for real runs"

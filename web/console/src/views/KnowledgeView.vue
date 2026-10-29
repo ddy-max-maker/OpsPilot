@@ -117,11 +117,13 @@ onMounted(load);
       </button>
     </div>
     <div v-if="searchError" class="state error" style="padding:10px">{{ searchError }}</div>
-    <template v-else-if="hits.length">
+    <template v-else-if="searchMode">
       <div class="muted" style="margin-bottom:8px;font-size:12px">
-        模式：<strong>{{ searchMode }}</strong>　延迟 {{ searchLatency }}ms　命中 {{ hits.length }}
+        模式：<strong>{{ searchMode }}</strong>
+        <template v-if="searchMode !== 'off'">　延迟 {{ searchLatency }}ms　命中 {{ hits.length }}</template>
+        <template v-else>　（rag_mode=off，知识检索未启用）</template>
       </div>
-      <table class="tbl">
+      <table class="tbl" v-if="hits.length">
         <thead><tr><th>文档</th><th>类型</th><th>版本</th><th>内容摘录</th></tr></thead>
         <tbody>
           <tr v-for="h in hits" :key="h.version_id">
@@ -132,8 +134,8 @@ onMounted(load);
           </tr>
         </tbody>
       </table>
+      <div v-else-if="searchMode !== 'off'" class="state">无命中结果</div>
     </template>
-    <div v-else-if="searchMode" class="state">无命中结果</div>
   </div>
 
   <div class="panel">

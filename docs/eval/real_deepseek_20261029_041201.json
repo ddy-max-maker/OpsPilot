@@ -1,0 +1,85 @@
+{
+  "status": "completed",
+  "eval_type": "real_model",
+  "provider": "deepseek",
+  "model_name": "deepseek-chat",
+  "model_config": {
+    "provider": "deepseek",
+    "model_name": "deepseek-chat",
+    "prompt_version": "d2-v1",
+    "rag": "off"
+  },
+  "dataset_version": "d6-eval-v2",
+  "dataset_digest": "4f5ca554e6e4ecde",
+  "cases_total": 7,
+  "passed": 0,
+  "failed": 7,
+  "note": "真实模型评估与 Fake 确定性评估严格分离；预期取自 d6-eval-v2 数据集未做任何改写",
+  "results": [
+    {
+      "case_key": "fault_redis_down_refuse",
+      "category": "单服务：Redis 进程不存在（连接拒绝）",
+      "passed": false,
+      "metrics": {
+        "error": "(sqlalchemy.dialects.postgresql.asyncpg.UniqueViolationError) duplicate key value violates unique constraint \"uq_assets_name_environment\"\n[SQL: INSERT INTO assets (id, name, environment, asset_type, status, criticality, endpoints, owner, tags) VALUES ($1::VARCHAR, $2::VARCHAR, $3::VARCHAR, $4::VARCH"
+      },
+      "detail": {}
+    },
+    {
+      "case_key": "fault_container_oom_exit",
+      "category": "单服务：容器 OOM 退出（exit 137）且服务失联",
+      "passed": false,
+      "metrics": {
+        "error": "(sqlalchemy.dialects.postgresql.asyncpg.UniqueViolationError) duplicate key value violates unique constraint \"uq_assets_name_environment\"\n[SQL: INSERT INTO assets (id, name, environment, asset_type, status, criticality, endpoints, owner, tags) VALUES ($1::VARCHAR, $2::VARCHAR, $3::VARCHAR, $4::VARCH"
+      },
+      "detail": {}
+    },
+    {
+      "case_key": "fault_java_stack_503",
+      "category": "跨栈：Java 服务同接口/同链路被诊断（503）",
+      "passed": false,
+      "metrics": {
+        "error": "(sqlalchemy.dialects.postgresql.asyncpg.UniqueViolationError) duplicate key value violates unique constraint \"uq_assets_name_environment\"\n[SQL: INSERT INTO assets (id, name, environment, asset_type, status, criticality, endpoints, owner, tags) VALUES ($1::VARCHAR, $2::VARCHAR, $3::VARCHAR, $4::VARCH"
+      },
+      "detail": {}
+    },
+    {
+      "case_key": "fault_mysql_connect_refuse",
+      "category": "MySQL：连接拒绝（凭据已配置、端口未监听）",
+      "passed": false,
+      "metrics": {
+        "error": "(sqlalchemy.dialects.postgresql.asyncpg.UniqueViolationError) duplicate key value violates unique constraint \"uq_assets_name_environment\"\n[SQL: INSERT INTO assets (id, name, environment, asset_type, status, criticality, endpoints, owner, tags) VALUES ($1::VARCHAR, $2::VARCHAR, $3::VARCHAR, $4::VARCH"
+      },
+      "detail": {}
+    },
+    {
+      "case_key": "fault_redis_down_timeout",
+      "category": "单服务：Redis 无响应（探测超时）",
+      "passed": false,
+      "metrics": {
+        "error": "(sqlalchemy.dialects.postgresql.asyncpg.UniqueViolationError) duplicate key value violates unique constraint \"uq_assets_name_environment\"\n[SQL: INSERT INTO assets (id, name, environment, asset_type, status, criticality, endpoints, owner, tags) VALUES ($1::VARCHAR, $2::VARCHAR, $3::VARCHAR, $4::VARCH"
+      },
+      "detail": {}
+    },
+    {
+      "case_key": "fault_unknown_exit_budget0",
+      "category": "证据不足：工具预算为 0 → 合理未知退出（不编造根因）",
+      "passed": false,
+      "metrics": {
+        "error": "(sqlalchemy.dialects.postgresql.asyncpg.UniqueViolationError) duplicate key value violates unique constraint \"uq_assets_name_environment\"\n[SQL: INSERT INTO assets (id, name, environment, asset_type, status, criticality, endpoints, owner, tags) VALUES ($1::VARCHAR, $2::VARCHAR, $3::VARCHAR, $4::VARCH"
+      },
+      "detail": {}
+    },
+    {
+      "case_key": "rag_hybrid_misleading_resist",
+      "category": "RAG hybrid：误导性知识不被采信",
+      "passed": false,
+      "metrics": {
+        "error": "embedding provider 'local_e5' requires the 'embedding' dependency group (uv sync --group embedding)"
+      },
+      "detail": {}
+    }
+  ],
+  "generated_at": "2026-10-29T04:12:01.602050+00:00",
+  "git_commit": "887df8a"
+}
