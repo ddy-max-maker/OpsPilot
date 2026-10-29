@@ -22,13 +22,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any
-
-import httpx
 
 API = (os.environ.get("DEMO_API") or "http://127.0.0.1:8000") + "/api/v1"
 PASSWORD = os.environ.get("DEMO_PASSWORD") or "E2ePassw0rd!2026"
@@ -41,20 +43,88 @@ def p(step: str, msg: str) -> None:
     print(f"[{step}] {msg}", flush=True)
 
 
-def new_client() -> httpx.Client:
-    # trust_env=False：本机环境变量可能带 HTTP_PROXY，会把 127.0.0.1 请求代理走
-    return httpx.Client(timeout=60.0, trust_env=False)
+class _Response:
+    """极简响应对象（只实现脚本用到的字段，便于阅读调用点）。"""
+
+    def __init__(self, status_code: int, text: str) -> None:
+        self.status_code = status_code
+        self.text = text
+
+    def json(self) -> Any:
+        return json.loads(self.text) if self.text else None
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}: {self.text[:200]}")
 
 
-def login(client: httpx.Client, username: str) -> dict[str, str]:
-    resp = client.post(f"{API}/auth/login", json={"username": username, "password": PASSWORD})
+class _Client:
+    """标准库 HTTP 客户端：演示脚本不依赖任何第三方包（无需 uv sync）。
+
+    空 ProxyHandler 显式忽略系统代理——本机 HTTP_PROXY 会把 127.0.0.1 请求
+    也交给代理，导致 502。
+    """
+
+    def __init__(self, timeout: float = 60.0) -> None:
+        self._timeout = timeout
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json_body: Any = None,
+        params: dict[str, Any] | None = None,
+    ) -> _Response:
+        if params:
+            query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+            url = f"{url}?{query}"
+        data = None
+        all_headers = {"Accept": "application/json", **(headers or {})}
+        if json_body is not None:
+            data = json.dumps(json_body).encode()
+            all_headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, headers=all_headers, method=method)
+        try:
+            with self._opener.open(req, timeout=self._timeout) as resp:
+                return _Response(resp.status, resp.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as exc:  # 4xx/5xx 也要能读到 envelope
+            return _Response(exc.code, exc.read().decode("utf-8", "replace"))
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> _Response:
+        return self.request("GET", url, headers=headers, params=params)
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json_body: Any = None,
+    ) -> _Response:
+        return self.request("POST", url, headers=headers, json_body=json_body)
+
+
+def new_client() -> _Client:
+    return _Client()
+
+
+def login(client: _Client, username: str) -> dict[str, str]:
+    resp = client.post(f"{API}/auth/login", json_body={"username": username, "password": PASSWORD})
     if resp.status_code != 200:
         raise SystemExit(f"登录失败 {username}: {resp.status_code} {resp.text[:200]}")
     token = resp.json()["data"]["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
 
-def find_asset(client: httpx.Client, headers: dict[str, str]) -> tuple[str, str]:
+def find_asset(client: _Client, headers: dict[str, str]) -> tuple[str, str]:
     """返回 (asset_id, container_name)。以资产登记为容器身份权威（D6 规则）。"""
     resp = client.get(f"{API}/assets", params={"limit": 200}, headers=headers)
     resp.raise_for_status()
@@ -70,7 +140,7 @@ def find_asset(client: httpx.Client, headers: dict[str, str]) -> tuple[str, str]
     return target["id"], str(endpoints.get("container_name") or TARGET_CONTAINER)
 
 
-def wait_run(client: httpx.Client, headers: dict[str, str], run_id: str) -> dict[str, Any]:
+def wait_run(client: _Client, headers: dict[str, str], run_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + POLL_TIMEOUT_SECONDS
     last = ""
     while time.monotonic() < deadline:
@@ -86,7 +156,7 @@ def wait_run(client: httpx.Client, headers: dict[str, str], run_id: str) -> dict
 
 
 def create_incident_and_diagnose(
-    client: httpx.Client,
+    client: _Client,
     operator: dict[str, str],
     asset_id: str,
     *,
@@ -99,7 +169,7 @@ def create_incident_and_diagnose(
     inc = client.post(
         f"{API}/incidents",
         headers={**operator, "Idempotency-Key": f"d7-{tag}-{stamp}"},
-        json={
+        json_body={
             "title": title,
             "environment": "sandbox",
             "primary_asset_id": asset_id,
@@ -118,7 +188,7 @@ def create_incident_and_diagnose(
     run = client.post(
         f"{API}/incidents/{incident_id}/investigations",
         headers={**operator, "Idempotency-Key": f"d7-{tag}-run-{stamp}"},
-        json={},
+        json_body={},
     )
     if run.status_code not in (201, 202):
         raise SystemExit(f"发起诊断失败: {run.status_code} {run.text[:300]}")
@@ -128,7 +198,7 @@ def create_incident_and_diagnose(
 
 
 def print_evidence_and_report(
-    client: httpx.Client, headers: dict[str, str], run_id: str, run: dict[str, Any]
+    client: _Client, headers: dict[str, str], run_id: str, run: dict[str, Any]
 ) -> None:
     ev = client.get(f"{API}/runs/{run_id}/evidence", params={"limit": 200}, headers=headers)
     items = ev.json()["data"]["items"] if ev.status_code == 200 else []
@@ -165,7 +235,7 @@ def print_evidence_and_report(
         )
 
 
-def route_a(client: httpx.Client) -> tuple[str, str]:
+def route_a(client: _Client) -> tuple[str, str]:
     print("\n=== 路线 A：故障登记 → DeepAgents 诊断 → Evidence → 报告 ===", flush=True)
     operator = login(client, "e2e_operator")
     asset_id, container = find_asset(client, operator)
@@ -200,7 +270,7 @@ def route_a(client: httpx.Client) -> tuple[str, str]:
     return incident_id, run_id
 
 
-def route_b(client: httpx.Client) -> None:
+def route_b(client: _Client) -> None:
     print("\n=== 路线 B：历史知识审核发布 → RAG 检索 → 辅助诊断 ===", flush=True)
     admin = login(client, "e2e_admin")
     operator = login(client, "e2e_operator")
@@ -272,7 +342,7 @@ def route_b(client: httpx.Client) -> None:
     print_evidence_and_report(client, operator, run_id, run)
 
 
-def route_c(client: httpx.Client, run_id: str | None) -> None:
+def route_c(client: _Client, run_id: str | None) -> None:
     print("\n=== 路线 C：Proposal → 四眼审批 → sandbox 执行门禁 → 恢复验证 ===", flush=True)
     admin = login(client, "e2e_admin")
     operator = login(client, "e2e_operator")
@@ -316,7 +386,7 @@ def route_c(client: httpx.Client, run_id: str | None) -> None:
     prp = client.post(
         f"{API}/proposals",
         headers={**operator, "Idempotency-Key": f"d7-c-{stamp}"},
-        json={
+        json_body={
             "run_id": run_id,
             "runbook_version_id": version_id,
             "target_asset_id": asset_id,
@@ -344,7 +414,7 @@ def route_c(client: httpx.Client, run_id: str | None) -> None:
 
     # 4. 四眼：发起人自己不能审批
     self_approve = client.post(
-        f"{API}/proposals/{pid}/approve", json={"comment": "自审"}, headers=operator
+        f"{API}/proposals/{pid}/approve", json_body={"comment": "自审"}, headers=operator
     )
     p(
         "C",
@@ -355,7 +425,7 @@ def route_c(client: httpx.Client, run_id: str | None) -> None:
     # 5. 另一账号审批通过
     ok = client.post(
         f"{API}/proposals/{pid}/approve",
-        json={"comment": "D7 演示：同意受控重启"},
+        json_body={"comment": "D7 演示：同意受控重启"},
         headers=approver,
     )
     if ok.status_code != 200:
