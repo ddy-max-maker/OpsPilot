@@ -42,12 +42,12 @@ jobs:
       - name: 39 个确定性评估案例自动执行 + 报告保存
         env:
           DATABASE_URL: postgresql+asyncpg://opspilot:opspilot@127.0.0.1:5432/opspilot_test
-        run: uv run python scripts/eval_fake_report.py --out docs/eval/fake_ci_report.json
+        run: uv run python scripts/eval_fake_report.py --out docs/eval/fake_ci_report_judge_v2.json
       - name: 上传评估报告产物
         uses: actions/upload-artifact@v4
         with:
           name: eval-report
-          path: docs/eval/fake_ci_report.json
+          path: docs/eval/fake_ci_report_judge_v2.json
 
   frontend:
     runs-on: ubuntu-latest

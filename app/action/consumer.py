@@ -369,11 +369,20 @@ async def run_consumer(
     import asyncio
 
     executor_id = executor_id or settings.action_executor_id or "ops-action"
+    # D6 安全默认值：真实执行要求「显式开启」+「隔离环境确认」双条件，
+    # 任一缺失即降级为拒绝执行（不是静默放行）。
+    execution_enabled = bool(settings.action_execution_enabled) and bool(
+        settings.action_isolated_daemon_ack
+    )
+    if settings.action_execution_enabled and not settings.action_isolated_daemon_ack:
+        logger.error(
+            "ACTION_EXECUTION_ENABLED=true but ACTION_ISOLATED_DAEMON_ACK is not set: "
+            "real write actions stay DISABLED (host docker.sock is a high-privilege credential; "
+            "acknowledge the isolated demo daemon explicitly)"
+        )
     executor = executor or ActionExecutor(
         container_name_prefix=settings.action_container_name_prefix,
-        # D6 安全门禁接线：真实执行默认关闭（demo-only），须显式
-        # ACTION_EXECUTION_ENABLED=true 且配合隔离演示 Daemon 才开启
-        execution_enabled=settings.action_execution_enabled,
+        execution_enabled=execution_enabled,
         docker=(
             DockerClient(socket_path=settings.action_docker_socket)
             if settings.action_docker_socket

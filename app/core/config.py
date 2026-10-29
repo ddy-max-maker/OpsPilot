@@ -61,10 +61,13 @@ class Settings(BaseSettings):
     agent_api_key_env: str | None = None  # 如 DEEPSEEK_API_KEY
     # OpenAI 兼容自定义 API 地址（deepseek 缺省官方 https://api.deepseek.com/v1）
     agent_api_base: str | None = None
-    agent_prompt_version: str = "d4-v1"
+    # d6-v2：报告阶段改为严格 Schema + 独立格式化调用（见 app/domains/agent/report.py）
+    agent_prompt_version: str = "d6-v2"
     # 允许在运行时直接使用内置确定性 fake 模型（D6：仅 CI/E2E 显式开启；
     # 默认 False 时 fake provider 仍要求测试侧注入模型，生产不可用）
     agent_fake_provider_enabled: bool = False
+    # 报告格式化/修复调用超时（独立模型调用，不含工具；不占 run 的迭代预算）
+    report_format_timeout_seconds: float = 120.0
 
     # ---- Run 预算默认值（服务端硬限制，ADR-8；超限强制终止）----
     budget_max_tool_calls: int = 24
@@ -128,6 +131,10 @@ class Settings(BaseSettings):
     # 演示 Daemon（ACTION_DOCKER_SOCKET 指向独立 daemon）且明确开启时才允许
     # 真实执行。安全边界说明见 docs/SECURITY_ACCEPTANCE.md。
     action_execution_enabled: bool = False
+    # 隔离环境确认（D6 安全默认值）：仅在运维已确认 ops-action 指向**专用隔离
+    # 演示 Daemon**、且已接受宿主 docker.sock 高权限残余风险时才置 true；
+    # 与 action_execution_enabled 同时为 true 才允许真实写操作。
+    action_isolated_daemon_ack: bool = False
     # 受控恢复专用 Docker socket（默认容器内 UDS；可指向独立演示 Daemon）
     action_docker_socket: str | None = None
     # 幂等账本收敛：claimed 超过该时长仍无结果的执行按崩溃处理（启动扫描 + 周期扫描）

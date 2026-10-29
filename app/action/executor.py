@@ -46,9 +46,13 @@ class ExecutionOutcome:
 class ActionExecutor:
     """Allowlist 动作执行器：目前仅支持 restart_container@v1。
 
-    安全门禁（D6）：execution_enabled=False（默认）时所有动作直接
-    PRE_CHECK_FAILED（demo-only 守卫）——应用层 allowlist 不等于基础设施
-    级隔离，真实执行仅在专用隔离演示 Daemon 上显式开启。
+    安全门禁（D6 收尾，默认拒绝）：
+    - `execution_enabled` **默认 False**：未显式开启时所有动作直接
+      PRE_CHECK_FAILED（demo-only 守卫）；
+    - 应用层 allowlist **不等于**基础设施级隔离：ops-action 挂载的宿主
+      docker.sock 仍是高权限凭据，真实执行仅在专用隔离演示 Daemon 上显式开启
+      （由 worker 装配处同时要求 ACTION_EXECUTION_ENABLED 与
+      ACTION_ISOLATED_DAEMON_ACK），残余风险见 docs/SECURITY_ACCEPTANCE.md。
     """
 
     def __init__(
@@ -56,7 +60,7 @@ class ActionExecutor:
         *,
         container_name_prefix: str,
         docker: DockerClient | None = None,
-        execution_enabled: bool = True,
+        execution_enabled: bool = False,
     ) -> None:
         self._prefix = container_name_prefix
         self._docker = docker or DockerClient()

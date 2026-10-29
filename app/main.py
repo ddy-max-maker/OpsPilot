@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
@@ -33,6 +35,31 @@ if TYPE_CHECKING:
 logger = logging.getLogger("opspilot")
 
 
+async def _warm_embeddings() -> None:
+    """API 侧后台预热 Embedding 模型（D6）。
+
+    知识发布链路（knowledge/versions/{id}/publish）无论 RAG_MODE 都会建向量索引，
+    因此模型冷加载（本地 e5 首次加载可达数十秒）会落在第一个发布请求上。这里在
+    启动后异步预热，不阻塞 startup / 健康检查；失败只记录日志并置 load_error，
+    由发布链路显式报错（不伪装成功）。
+    """
+    from app.domains.rag.embeddings import get_embedding_provider  # noqa: PLC0415
+
+    try:
+        provider = get_embedding_provider()
+    except Exception:  # noqa: BLE001 — provider 配置错误不应拖垮 API 启动
+        logger.exception("embedding provider unavailable; knowledge publish will fail fast")
+        return
+    if provider.ready:
+        return
+    try:
+        await asyncio.to_thread(provider.warm_up)
+    except Exception:  # noqa: BLE001 — 预热失败：知识发布显式报错，其余功能不受影响
+        logger.warning("embedding warm-up failed: %s", provider.load_error, exc_info=True)
+        return
+    logger.info("embedding model warmed up (%s)", provider.model_version)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """启动：初始化引擎并执行幂等 bootstrap（角色/系统账号/初始 Admin）。"""
@@ -46,10 +73,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         rejected = await integrations_service.sync_capability_manifests(session)
     if rejected:
         logger.warning("capability manifests rejected (incompatible): %s", rejected)
+    # 后台预热 Embedding 模型（fake provider 无需预热；不阻塞启动）
+    warmup: asyncio.Task[None] | None = None
+    if settings.embedding_provider != "fake":
+        warmup = asyncio.create_task(_warm_embeddings())
     logger.info("OpsPilot Next started (database ready, bootstrap complete)")
-    yield
-    await dispose_engine()
-    logger.info("OpsPilot Next stopped, engine disposed")
+    try:
+        yield
+    finally:
+        if warmup is not None and not warmup.done():
+            warmup.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await warmup  # 不等待线程收尾（模型加载线程自行结束），只回收任务
+        await dispose_engine()
+        logger.info("OpsPilot Next stopped, engine disposed")
 
 
 def _envelope_response(status_code: int, error: ErrorBody, request_id: str) -> JSONResponse:

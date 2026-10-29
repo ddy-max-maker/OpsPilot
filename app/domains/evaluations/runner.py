@@ -336,8 +336,10 @@ class EvaluationRunner:
         incident_id, run_id = await self._seed_diagnosis_world(
             ns, case_key, scenario, asset_name, primary, connectors_cfg
         )
+        # 评估 runner 自己持有该 run 直到执行结束：租约必须覆盖真实模型的长耗时，
+        # 否则前面的 run 租约过期后会被 claim 重新选中（跨案例串号）
         claimed = await claim.claim_next_run(
-            self._sf, worker_id="eval-runner", lease_ttl_seconds=120
+            self._sf, worker_id="eval-runner", lease_ttl_seconds=3600
         )
         assert claimed is not None and claimed["id"] == run_id
         run, incident, asset = await self._load_run_triple(run_id)
@@ -370,6 +372,10 @@ class EvaluationRunner:
                 usage=dict(outcome.usage),
                 latency_ms=latency_ms,
                 expected=dict(case.expected or {}),
+                # judge-v2：报告生成失败与诊断 unknown 分别计入，不混同
+                report_status=outcome.report_status,
+                report_failure=outcome.report_failure,
+                outcome_error=outcome.error,
             )
         return passed, metrics, detail, incident_id
 
@@ -1155,7 +1161,7 @@ class EvaluationRunner:
             dict(scenario_diagnosis["connectors"]),
         )
         claimed = await claim.claim_next_run(
-            self._sf, worker_id="eval-runner", lease_ttl_seconds=120
+            self._sf, worker_id="eval-runner", lease_ttl_seconds=3600
         )
         assert claimed is not None
         run, incident, asset = await self._load_run_triple(run_id)
@@ -1180,6 +1186,8 @@ class EvaluationRunner:
                 usage=dict(outcome.usage),
                 latency_ms=0,
                 expected=dict(case.expected or {}),
+                report_status=outcome.report_status,
+                report_failure=outcome.report_failure,
             )
 
             evidence_rows = (
@@ -1227,7 +1235,7 @@ class EvaluationRunner:
             dict(scenario_diagnosis["connectors"]),
         )
         claimed = await claim.claim_next_run(
-            self._sf, worker_id="eval-runner", lease_ttl_seconds=120
+            self._sf, worker_id="eval-runner", lease_ttl_seconds=3600
         )
         assert claimed is not None
         run, incident, asset = await self._load_run_triple(run_id)

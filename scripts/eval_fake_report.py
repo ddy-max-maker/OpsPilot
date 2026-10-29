@@ -27,6 +27,7 @@ from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.domains.evaluations import cases as cases_mod  # noqa: E402
+from app.domains.evaluations import judge as judge_mod  # noqa: E402
 from app.domains.evaluations.runner import EvaluationRunner, _fast_settings  # noqa: E402
 from app.models import EvaluationRun  # noqa: E402
 
@@ -124,6 +125,7 @@ async def main(out_path: str) -> int:
     report = {
         "status": "completed" if all_passed else "failed",
         "eval_type": "fake_deterministic",
+        "judge_version": judge_mod.JUDGE_VERSION,
         "dataset_version": cases_mod.DATASET_VERSION,
         "dataset_digest": cases_mod.dataset_digest(),
         "suites": suites_report,

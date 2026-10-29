@@ -29,7 +29,7 @@ from app.domains.knowledge.schemas import (
     KnowledgeCreateRequest,
     KnowledgeVersionCreateRequest,
 )
-from app.domains.rag.embeddings import EmbeddingProvider, build_embedding_provider
+from app.domains.rag.embeddings import EmbeddingProvider, get_embedding_provider
 from app.domains.rag.retrieval import search_knowledge
 from app.models import KnowledgeDocument, KnowledgeVersion
 
@@ -40,7 +40,13 @@ AuthorDep = Annotated[CurrentUser, Depends(require_roles("admin", "operator"))]
 
 
 def _provider() -> EmbeddingProvider:
-    return build_embedding_provider(get_settings())
+    """进程级复用的 Embedding Provider（D6）。
+
+    此前每次发布都新建 Provider：本地 e5 模型会被反复加载（单次数十秒 + 每份
+    数百 MB 常驻内存），发布接口因此长时间阻塞并由 GC 慢慢释放。复用单例后
+    首次发布命中启动预热（app.main.lifespan 后台 warm_up），后续发布为纯推理。
+    """
+    return get_embedding_provider()
 
 
 def _version_view(v: KnowledgeVersion) -> dict[str, Any]:

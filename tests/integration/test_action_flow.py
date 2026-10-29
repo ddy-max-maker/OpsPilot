@@ -105,7 +105,14 @@ class FakeDockerClient(DockerClient):
 
 def _executor(**docker_kwargs: Any) -> tuple[ActionExecutor, FakeDockerClient]:
     docker = FakeDockerClient(**docker_kwargs)
-    return ActionExecutor(container_name_prefix="opspilot-demo-", docker=docker), docker
+    # D6 收尾：executor 默认拒绝执行（execution_enabled=False）；
+    # 本测试显式开启以覆盖正常执行路径（Docker 客户端为注入的 Fake，无真实副作用）
+    return (
+        ActionExecutor(
+            container_name_prefix="opspilot-demo-", docker=docker, execution_enabled=True
+        ),
+        docker,
+    )
 
 
 @pytest.fixture

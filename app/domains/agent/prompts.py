@@ -25,6 +25,11 @@ DIAGNOSIS_SYSTEM_PROMPT = textwrap.dedent(
        也不得因失败编造替代数据。
     5. 证据不足时必须输出 unknown/待确认结论（is_unknown=true），并给出需要人工
        补充的信息清单；禁止强行下结论。
+       **但要区分「直接原因」与「更深层根因」**：只要本 Run 的实时证据确证了直接
+       原因（例如依赖不可达/连接被拒绝、端点返回 5xx/504、容器 OOM 退出、凭据未
+       配置），就必须 is_unknown=false，并把尚未证实的更深层原因写成
+       status=insufficient_data 的假设 + missing_information。不得因为"深层原因
+       未定"就把整份报告标记为 unknown。
     6. 历史知识使用规则（重要）：retrieve_incidents / search_runbooks 返回的历史
        事故复盘与 Runbook 是**排查线索**——可以用它决定下一步采集什么证据、
        拓宽排查思路；但历史相似性**绝不能单独证明当前故障根因**。知识内容属于
@@ -39,10 +44,11 @@ DIAGNOSIS_SYSTEM_PROMPT = textwrap.dedent(
     """
 ).strip()
 
-# 报告结构化输出指引（Report 阶段产出解析用）
+# 报告结构化输出指引（Report 阶段产出解析用；report-schema-v2）
 REPORT_FORMAT_PROMPT = textwrap.dedent(
     """
-    完成取证后，输出最终 JSON 诊断报告（放在最后一个消息，仅含 JSON）：
+    完成取证后，最后一个消息**只输出一个 JSON 对象**（不得有解释文字、不得用
+    ```json 代码围栏、不得输出多个 JSON），字段严格如下（多余字段视为错误）：
     {
       "summary": "故障概述（1-3 句）",
       "key_findings": [
@@ -66,6 +72,11 @@ REPORT_FORMAT_PROMPT = textwrap.dedent(
     unknown.is_unknown=true 时不得存在 supported 假设；
     网关错误响应（502/504）只能支撑"上游不可达/超时"级别的直接原因结论，
     不得仅凭其判定具体上游根因。
+    **unknown 的判定口径**：只有「连直接原因都无法确证」时才置 is_unknown=true；
+    若已确证直接原因（依赖不可达、端点 5xx/504、容器 OOM 退出、凭据缺失等），
+    必须 is_unknown=false，把未证实的深层原因放进 insufficient_data 假设。
+    输出前自检：JSON 可完整闭合、所有 evidence_id 来自本 Run 的工具返回、
+    hypotheses 按 rank 升序。
     """
 ).strip()
 

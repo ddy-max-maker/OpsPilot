@@ -41,6 +41,16 @@ from app.domains.agent.prompts import (
     REPORT_FORMAT_PROMPT,
     build_run_task_prompt,
 )
+from app.domains.agent.report import (
+    REPORT_STATUS_FORMATTED,
+    REPORT_STATUS_OK,
+    REPORT_STATUS_REPAIRED,
+    EvidenceBrief,
+    ReportFailureKind,
+    ReportGenerator,
+    ReportResult,
+)
+from app.domains.agent.report_schema import REPORT_SCHEMA_VERSION
 from app.domains.tools.context import (
     LEASE_GUARD_SQL,
     LeaseFence,
@@ -140,6 +150,11 @@ class RunOutcome:
     report: dict[str, Any] | None = None
     unknown: bool = False
     error: str | None = None
+    # D6 收尾：报告生成状态（ok/formatted/repaired/failed）与失败类型——
+    # 报告生成失败必须与「真实诊断 unknown」区分，评估与审计分别统计
+    report_status: str = REPORT_STATUS_OK
+    report_failure: str | None = None
+    report_attempts: int = 0
 
 
 @dataclass
@@ -171,6 +186,12 @@ class AgentRuntime:
 
     def __init__(self, deps: RuntimeDeps) -> None:
         self._deps = deps
+        # 报告生成器：只持有 ChatModel（无工具），格式化/修复阶段结构上无法重新取证
+        self._report_generator = ReportGenerator(
+            deps.model,
+            deps.settings,
+            allow_formatting=deps.model_handle.provider != "fake",
+        )
         _register_harness_profile_for(
             deps.model,
             deps.model_handle.provider,
@@ -318,41 +339,87 @@ class AgentRuntime:
                 error=f"{type(exc).__name__}: {exc}"[:500],
             )
 
-        # 正常结束：解析最终 JSON 报告
-        report_data = _parse_report(final_message)
-        if report_data is None:
+        # 正常结束：结构化报告（直读 → 独立格式化 → 一次受控修复 → 明确失败）
+        evidence_briefs = await self._evidence_briefs(run.id)
+        report_result = await self._report_generator.generate(
+            final_message=final_message,
+            evidence=evidence_briefs,
+            run_id=run.id,
+        )
+        if report_result.failed:
             logger.warning(
-                "run %s final AI message not parseable as report JSON: %.400r",
+                "run %s report generation failed: kind=%s attempts=%s tail=%.300r",
                 run.id,
+                report_result.failure_kind,
+                report_result.attempts,
                 getattr(final_message, "content", None),
             )
-        outcome = await self._finalize_report(execution, report_data, budget)
-        return outcome
+            with contextlib.suppress(LeaseLostError):
+                await execution.events.append(
+                    RunEventType.ERROR,
+                    {
+                        "error": "ReportGenerationFailed",
+                        "detail": str(report_result.failure_kind),
+                        "attempts": report_result.attempts,
+                    },
+                )
+        elif report_result.status in (REPORT_STATUS_FORMATTED, REPORT_STATUS_REPAIRED):
+            logger.info(
+                "run %s report recovered via %s (mode=%s attempts=%s)",
+                run.id,
+                report_result.status,
+                report_result.mode,
+                report_result.attempts,
+            )
+        return await self._finalize_report(execution, report_result, budget)
 
     # ---- 报告 / 假设 / 证据引用校验 ----
 
     async def _finalize_report(
         self,
         execution: RunExecution,
-        report_data: dict[str, Any] | None,
+        report_result: ReportResult | dict[str, Any] | None,
         budget: RunBudget,
     ) -> RunOutcome:
         run = execution.run
         deps = self._deps
+        if not isinstance(report_result, ReportResult):
+            # 兼容内部调用/测试直接传入已解析字典；None = 未产出报告（按生成失败处理）
+            report_result = ReportResult(
+                payload=report_result if isinstance(report_result, dict) else None,
+                status=REPORT_STATUS_OK if isinstance(report_result, dict) else "failed",
+                failure_kind=None if isinstance(report_result, dict) else None,
+            )
+        report_data = report_result.payload
+        report_failed = report_result.failed
+        failure_kind = report_result.failure_kind
+        if report_failed and failure_kind is None:
+            failure_kind = ReportFailureKind.MODEL_ERROR
+        failure_detail = str(report_result.detail.get("message") or "") if report_failed else ""
         if report_data is None:
+            # 报告生成失败：**明确**标注为生成失败（不伪装成诊断结论 unknown）
             report_data = {
-                "summary": "模型未产出可解析的结构化报告。",
+                "summary": (
+                    "报告生成失败：模型未能产出符合 Schema 的结构化报告"
+                    f"（{failure_kind}）。原始输出已留档于 run 事件与日志。"
+                ),
                 "key_findings": [],
                 "hypotheses": [],
                 "unknown": {
                     "is_unknown": True,
-                    "reason": "模型最终输出无法解析为诊断报告 JSON",
-                    "missing_information": ["重新发起诊断或人工排查"],
+                    "reason": (
+                        f"报告生成失败（{failure_kind}）：{failure_detail or '无可用结构化输出'}"
+                    ),
+                    "missing_information": [
+                        "重新发起诊断（模型输出稳定性问题，非诊断结论）",
+                        "必要时人工复核本次 run 的证据与模型原始输出",
+                    ],
+                    "failure_kind": "report_generation_failed",
                 },
-                "next_manual_steps": ["人工复查事件与资产状态"],
+                "next_manual_steps": ["人工复核本次 run 的实时证据与模型原始输出"],
             }
         unknown_note: dict[str, Any] = dict(report_data.get("unknown") or {})
-        is_unknown = bool(unknown_note.get("is_unknown"))
+        is_unknown = bool(unknown_note.get("is_unknown")) or report_failed
 
         # 证据引用有效性：全部 evidence_ids 必须命中本 run 已落库 Evidence；
         # D3 证据质量四分类：healthy（正常取证）/ fault_observed（成功采集到目标
@@ -498,6 +565,9 @@ class AgentRuntime:
                     "summary": str(report_data.get("summary") or "")[:2000],
                     "key_findings": key_findings,
                     "next_manual_steps": list(report_data.get("next_manual_steps") or []),
+                    # 报告生成状态（评估与审计据此区分「结构化输出失败」与诊断结论）
+                    "report_status": report_result.status,
+                    "report_failure_kind": str(failure_kind) if report_failed else None,
                 },
                 hypothesis_ids=hypothesis_ids,
                 evidence_refs=sorted(existing),
@@ -505,12 +575,19 @@ class AgentRuntime:
                     "is_unknown": is_unknown,
                     "reason": str(unknown_note.get("reason") or "") if is_unknown else None,
                     "missing_information": list(unknown_note.get("missing_information") or []),
+                    "failure_kind": "report_generation_failed" if report_failed else None,
                 },
                 generator={
                     "provider": self._deps.model_handle.provider,
                     "model": self._deps.model_handle.model_name,
                     "prompt_version": deps.settings.agent_prompt_version,
                     "rag_mode": deps.settings.rag_mode,
+                    "report_schema_version": REPORT_SCHEMA_VERSION,
+                    "report_status": report_result.status,
+                    "report_mode": report_result.mode,
+                    "report_attempts": report_result.attempts,
+                    "report_failure_kind": str(failure_kind) if report_failed else None,
+                    "report_dropped_references": report_result.dropped_references,
                 },
                 generated_at=datetime.now(UTC),
             )
@@ -525,6 +602,9 @@ class AgentRuntime:
             usage=budget.as_usage(),
             report=report_data,
             unknown=is_unknown,
+            report_status=report_result.status,
+            report_failure=str(failure_kind) if report_failed else None,
+            report_attempts=report_result.attempts,
         )
 
     # ---- 内部 ----
@@ -631,6 +711,31 @@ class AgentRuntime:
                 select(func.count()).select_from(Evidence).where(Evidence.run_id == run_id)
             )
             return int(count or 0)
+
+    async def _evidence_briefs(self, run_id: str) -> list[EvidenceBrief]:
+        """报告格式化阶段的证据清单（只读摘要；原始日志不进提示词）。"""
+        async with self._deps.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        Evidence.id,
+                        Evidence.source_type,
+                        Evidence.status,
+                        Evidence.error_code,
+                        Evidence.summary_redacted,
+                    ).where(Evidence.run_id == run_id)
+                )
+            ).all()
+        return [
+            EvidenceBrief(
+                evidence_id=row.id,
+                source_type=str(row.source_type or ""),
+                status=str(row.status or ""),
+                error_code=str(row.error_code) if row.error_code is not None else None,
+                summary=str(row.summary_redacted or "")[:400],
+            )
+            for row in rows
+        ]
 
 
 class _NoNewEvidence(Exception):

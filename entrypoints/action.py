@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import (
 from app.action import convergence
 from app.action import outbox as outbox_mod
 from app.action.consumer import run_consumer
+from app.action.docker_client import DockerClient
 from app.action.executor import ActionExecutor
 from app.core.config import Settings, get_settings
 from app.models import ActionExecution, ActionExecutionStatus
@@ -151,7 +152,17 @@ async def main() -> None:
             session_factory,
             rabbitmq_url=settings.rabbitmq_url,
             settings=settings,
-            executor=ActionExecutor(container_name_prefix=settings.action_container_name_prefix),
+            # 真实执行需「显式开启 + 隔离环境确认」双条件（executor 默认拒绝）
+            executor=ActionExecutor(
+                container_name_prefix=settings.action_container_name_prefix,
+                execution_enabled=bool(settings.action_execution_enabled)
+                and bool(settings.action_isolated_daemon_ack),
+                docker=(
+                    DockerClient(socket_path=settings.action_docker_socket)
+                    if settings.action_docker_socket
+                    else None
+                ),
+            ),
             executor_id=executor_id,
         )
     )

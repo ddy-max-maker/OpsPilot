@@ -2,14 +2,109 @@
 
 from __future__ import annotations
 
+import sys
+import threading
+import time
+import types
+from typing import Any
+
+import pytest
+
 from app.domains.rag.chunking import chunk_content
-from app.domains.rag.embeddings import FakeEmbeddingProvider
+from app.domains.rag.embeddings import (
+    EmbeddingError,
+    FakeEmbeddingProvider,
+    LocalE5EmbeddingProvider,
+)
 from app.domains.rag.retrieval import _rrf_fuse
 from app.domains.tools.evidence_quality import (
     EvidenceQuality,
     classify_evidence,
     root_cause_capable,
 )
+
+
+class _FakeSTModel:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.max_seq_length = 0
+
+
+def _install_fake_sentence_transformers(
+    monkeypatch: pytest.MonkeyPatch, ctor: Any
+) -> dict[str, int]:
+    """注入伪 sentence_transformers 模块（不联网、不装依赖组）。"""
+    calls = {"n": 0}
+
+    def _wrapped(name: str) -> _FakeSTModel:
+        calls["n"] += 1
+        return ctor(name)
+
+    module = types.ModuleType("sentence_transformers")
+    module.SentenceTransformer = _wrapped  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", module)
+    return calls
+
+
+# ---- LocalE5 预热：并发互斥 + 失败显式记录（D6）----
+
+
+def test_local_e5_warm_up_is_single_load_under_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API 启动预热与首个发布请求并发时只加载一份模型（否则双倍内存/耗时）。"""
+
+    def _slow_ctor(name: str) -> _FakeSTModel:
+        time.sleep(0.15)  # 放大竞态窗口
+        return _FakeSTModel(name)
+
+    calls = _install_fake_sentence_transformers(monkeypatch, _slow_ctor)
+    provider = LocalE5EmbeddingProvider(
+        model_name="intfloat/multilingual-e5-small",
+        dimension=384,
+        chunking_version="1",
+    )
+    assert provider.ready is False
+    errors: list[BaseException] = []
+
+    def _worker() -> None:
+        try:
+            provider.warm_up()
+        except BaseException as exc:  # noqa: BLE001 — 线程内异常需回传到主线程断言
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_worker) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert calls["n"] == 1  # 只构造一次 SentenceTransformer
+    assert provider.ready is True
+    assert provider.load_error is None
+
+
+def test_local_e5_load_failure_is_recorded_not_disguised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """模型加载失败必须抛 EmbeddingError 且记录原因，不静默降级为可用。"""
+
+    def _boom(name: str) -> _FakeSTModel:
+        raise OSError("connection reset by peer")
+
+    _install_fake_sentence_transformers(monkeypatch, _boom)
+    provider = LocalE5EmbeddingProvider(
+        model_name="intfloat/multilingual-e5-small", dimension=384, chunking_version="1"
+    )
+    with pytest.raises(EmbeddingError, match="connection reset"):
+        provider.warm_up()
+    assert provider.ready is False
+    assert provider.load_error is not None and "connection reset" in provider.load_error
+    # 已知失败不反复重试（避免每个请求都触发一次数十秒加载）
+    with pytest.raises(EmbeddingError):
+        provider.warm_up()
+
 
 # ---- Fake Embedding（CI 确定性）----
 

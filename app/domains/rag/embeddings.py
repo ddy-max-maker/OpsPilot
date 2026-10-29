@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import math
 import random
+import threading
 from abc import ABC, abstractmethod
 from functools import lru_cache
 
@@ -51,6 +52,11 @@ class EmbeddingProvider(ABC):
     def ready(self) -> bool:
         """模型是否已就绪（fake 恒 True；本地模型加载完成前为 False）。"""
         return True
+
+    @property
+    def load_error(self) -> str | None:
+        """预热/加载失败原因（None = 无失败）；供受控降级透出，不伪装成功。"""
+        return None
 
     def warm_up(self) -> None:  # noqa: B027 — 默认空实现是接口约定（fake 无需预热）
         """预热（加载模型；允许阻塞，调用方应放在后台线程）。"""
@@ -91,6 +97,9 @@ class LocalE5EmbeddingProvider(EmbeddingProvider):
     D5：模型加载移至 warm_up()（Worker 后台线程预热），推理经 aembed_* 在
     工作线程执行——事件循环/心跳/取消不再被阻塞；未就绪时 ready=False，
     调用方显式受控降级。
+
+    D6：warm_up() 加进程级互斥锁——API 启动预热与首个发布请求可能并发调用，
+    无锁会各自加载一份模型（双倍内存 + 双倍耗时）。
     """
 
     def __init__(self, *, model_name: str, dimension: int, chunking_version: str) -> None:
@@ -100,6 +109,7 @@ class LocalE5EmbeddingProvider(EmbeddingProvider):
         self.chunking_version = chunking_version
         self._model: object | None = None
         self._load_error: str | None = None
+        self._load_lock = threading.Lock()
 
     @property
     def ready(self) -> bool:
@@ -113,17 +123,28 @@ class LocalE5EmbeddingProvider(EmbeddingProvider):
     def warm_up(self) -> None:
         if self._model is not None:
             return
-        try:
-            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-        except ImportError as exc:  # pragma: no cover — 依赖组未安装
-            self._load_error = (
-                "embedding provider 'local_e5' requires the 'embedding' dependency "
-                "group (uv sync --group embedding)"
-            )
-            raise EmbeddingError(self._load_error) from exc
-        model = SentenceTransformer(self.model_name)
-        model.max_seq_length = 512
-        self._model = model
+        # 双检锁：并发调用方共享同一次加载（等待者阻塞至模型就绪或加载失败）
+        with self._load_lock:
+            if self._model is not None:
+                return
+            if self._load_error is not None:
+                raise EmbeddingError(self._load_error)
+            try:
+                from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+            except ImportError as exc:  # pragma: no cover — 依赖组未安装
+                self._load_error = (
+                    "embedding provider 'local_e5' requires the 'embedding' dependency "
+                    "group (uv sync --group embedding)"
+                )
+                raise EmbeddingError(self._load_error) from exc
+            try:
+                model = SentenceTransformer(self.model_name)
+            except Exception as exc:  # noqa: BLE001 — 加载失败记录原因，调用方显式降级
+                self._load_error = f"failed to load embedding model '{self.model_name}': {exc}"
+                raise EmbeddingError(self._load_error) from exc
+            model.max_seq_length = 512
+            self._model = model
+            self._load_error = None
 
     def _ensure_model(self) -> object:
         if self._model is None:

@@ -1,0 +1,47 @@
+{
+  "status": "completed",
+  "eval_type": "fake_deterministic",
+  "judge_version": "judge-v2",
+  "dataset_version": "d6-eval-v2",
+  "dataset_digest": "4f5ca554e6e4ecde",
+  "suites": [
+    {
+      "suite": "fault-core",
+      "status": "completed",
+      "summary": {
+        "failed": 0,
+        "passed": 12,
+        "cases_total": 12
+      }
+    },
+    {
+      "suite": "security-gates",
+      "status": "completed",
+      "summary": {
+        "failed": 0,
+        "passed": 13,
+        "cases_total": 13
+      }
+    },
+    {
+      "suite": "rag-ablation",
+      "status": "completed",
+      "summary": {
+        "failed": 0,
+        "passed": 6,
+        "cases_total": 6
+      }
+    },
+    {
+      "suite": "reliability-recovery",
+      "status": "completed",
+      "summary": {
+        "failed": 0,
+        "passed": 8,
+        "cases_total": 8
+      }
+    }
+  ],
+  "generated_at": "2026-10-29T07:44:17.604681+00:00",
+  "git_commit": "eafb3d5"
+}

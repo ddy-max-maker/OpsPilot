@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,13 +30,28 @@ from app.models import Asset
 if TYPE_CHECKING:
     from app.core.config import Settings
 
+logger = logging.getLogger(__name__)
+
 
 def _to_response(asset: Asset) -> AssetResponse:
     from app.domains.assets.schemas import AssetEndpoints
 
     endpoints = None
     if asset.endpoints:
-        endpoints = AssetEndpoints(**asset.endpoints)
+        # 响应侧容错（D6 收尾）：`AssetEndpoints` 对**请求**保持 extra="forbid"，
+        # 但历史/非 API 写入的行可能带有未声明字段（如 host/port），
+        # 不能因为单行脏数据把整个资产列表打成 500。
+        allowed = set(AssetEndpoints.model_fields)
+        raw = dict(asset.endpoints)
+        cleaned = {key: value for key, value in raw.items() if key in allowed}
+        dropped = sorted(set(raw) - allowed)
+        if dropped:
+            logger.warning("asset %s endpoints dropped undeclared keys: %s", asset.id, dropped)
+        try:
+            endpoints = AssetEndpoints(**cleaned)
+        except ValidationError:
+            logger.warning("asset %s endpoints invalid; returning empty endpoints", asset.id)
+            endpoints = AssetEndpoints()
     return AssetResponse(
         id=asset.id,
         name=asset.name,
