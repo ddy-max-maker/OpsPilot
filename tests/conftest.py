@@ -41,6 +41,13 @@ os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = ADMIN_BOOT_PASSWORD
 # D4：测试一律用确定性 Fake Embedding（不联网下载模型）；RAG 相关测试按需覆盖
 os.environ.setdefault("EMBEDDING_PROVIDER", "fake")
+# D7：把 Agent provider / RAG 开关固定为测试基线，避免开发者本地 .env
+# （例如为演示而设 AGENT_PROVIDER=deepseek、RAG_MODE=hybrid）改变测试行为。
+# os.environ 优先级高于 .env 文件，因此这里的 setdefault 一旦生效即覆盖本地配置。
+os.environ.setdefault("AGENT_PROVIDER", "fake")
+os.environ.setdefault("AGENT_MODEL_NAME", "fake-diagnoser")
+os.environ.setdefault("AGENT_FAKE_PROVIDER_ENABLED", "true")
+os.environ.setdefault("RAG_MODE", "off")
 # D6：SSE 测试加速（轮询/心跳/总时长取测试级小值，不改变语义）
 os.environ.setdefault("SSE_POLL_INTERVAL_SECONDS", "0.05")
 os.environ.setdefault("SSE_HEARTBEAT_SECONDS", "0.3")

@@ -40,6 +40,12 @@ services:
       # D4：RAG 模式与 Embedding（知识检索 API 侧使用）
       RAG_MODE: ${RAG_MODE:-off}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local_e5}
+      # D7：run 的 model_config 快照由 API 侧写入，必须与 Worker 使用同一套
+      # Agent 配置，否则快照记录的 provider/model/prompt 与实际执行不一致
+      AGENT_PROVIDER: ${AGENT_PROVIDER:-fake}
+      AGENT_MODEL_NAME: ${AGENT_MODEL_NAME:-fake-diagnoser}
+      AGENT_PROMPT_VERSION: ${AGENT_PROMPT_VERSION:-d6-v2}
+      AGENT_FAKE_PROVIDER_ENABLED: ${AGENT_FAKE_PROVIDER_ENABLED:-false}
       # HuggingFace 访问端点与缓存卷（国内网络经镜像下载；模型缓存跨容器重建保留）
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
     volumes:
@@ -58,6 +64,9 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      args:
+        # 构建期 npm 源（默认国内镜像；海外网络可覆盖为 https://registry.npmjs.org）
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
     container_name: opspilot-web
     depends_on:
       api:
@@ -89,7 +98,7 @@ services:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       # D3：MySQL 只读诊断账号密码（连接器经 password_env 间接引用）
       D3_MYSQL_RO_PASSWORD: ${D3_MYSQL_RO_PASSWORD:-}
-      AGENT_PROMPT_VERSION: ${AGENT_PROMPT_VERSION:-d4-v1}
+      AGENT_PROMPT_VERSION: ${AGENT_PROMPT_VERSION:-d6-v2}
       # D4：RAG 模式与 Embedding（Agent 知识工具按 RAG_MODE 决定可用性）
       RAG_MODE: ${RAG_MODE:-off}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local_e5}

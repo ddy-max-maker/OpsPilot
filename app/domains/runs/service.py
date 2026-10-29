@@ -135,7 +135,10 @@ async def create_run(
         "provider": settings.agent_provider,
         "model_name": settings.agent_model_name,
         "prompt_version": settings.agent_prompt_version,
-        "rag": "off",
+        # D7 修复：此前硬编码 "off"，导致 RAG 开启时 run 快照仍记录 off，
+        # 违反 CONTRACTS（RAG 开关必须进 run model_config），且让 RAG on/off
+        # 对照实验无法按快照分组。此处取部署配置的真实值。
+        "rag": settings.rag_mode,
     }
     run_id = new_id("run_")
     session.add(

@@ -129,6 +129,28 @@ INPUT_MODELS: dict[str, type[BaseModel]] = {
 }
 
 
+def resolve_container_name(
+    *,
+    endpoints: dict[str, Any] | None,
+    instance_config: dict[str, Any],
+    asset_name: str,
+) -> str:
+    """解析工具要观测的容器名（D7 修复）。
+
+    容器身份以**资产登记**为唯一权威（与 D6 动作执行门禁同一规则）：
+    `assets.endpoints.container_name` 优先；仅在未登记时回退到历史推导
+    「实例 container_prefix + 资产名」（兼容 D2 早期种子）。
+
+    历史实现只有前缀推导：资产名若自带业务前缀（如 `demo-redis`）会得到
+    双前缀容器名 `opspilot-demo-demo-redis`，导致 docker.inspect / docker.logs
+    恒判 CONTAINER_NOT_FOUND——证据侧把"看不见"误当成"没问题"。
+    """
+    registered = str((endpoints or {}).get("container_name") or "").strip()
+    if registered:
+        return registered
+    return str(instance_config.get("container_prefix", "")) + asset_name
+
+
 class ToolGateway:
     """按 manifest 生成受控只读工具；每个 run 绑定独立上下文。"""
 
@@ -368,7 +390,9 @@ class ToolGateway:
             )
         if spec.key in ("get_container_status", "read_container_logs"):
             base_url = str(config.get("base_url", ""))
-            container_name = str(config.get("container_prefix", "")) + asset.name
+            container_name = resolve_container_name(
+                endpoints=asset.endpoints, instance_config=config, asset_name=asset.name
+            )
             container_id = await connectors.docker_proxy.find_container_id(
                 base_url=base_url, container_name=container_name, timeout_seconds=timeout
             )

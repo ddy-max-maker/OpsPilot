@@ -2,18 +2,28 @@
 
 直连 PostgreSQL 写入（连接器实例的 POST /integrations API 属 D3 范围）。
 需 Docker PostgreSQL 已启动且业务库已迁移。
+
+连接串优先级：`SEED_DSN` > `DATABASE_URL`（容器内为 postgres:5432）>
+默认宿主机端口映射 127.0.0.1:5432。因此既可在宿主机运行，
+也可在容器内运行（`docker compose exec api python scripts/seed_demo.py`）。
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 
 import asyncpg
 
 # 127.0.0.1 强制走 Docker 容器（本机 ::1 上可能有另一个 PostgreSQL 服务）
-DSN = "postgresql://opspilot:opspilot@127.0.0.1:5432/opspilot"
+DEFAULT_DSN = "postgresql://opspilot:opspilot@127.0.0.1:5432/opspilot"
+DSN = (
+    os.environ.get("SEED_DSN")
+    or os.environ.get("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+    or DEFAULT_DSN
+)
 
 CONNECTOR_TYPES = [
     ("ct_redis_ro", "redis-ro", "Redis 只读健康检查"),
@@ -118,7 +128,9 @@ DEMO_ASSETS = [
         "environment": "sandbox",
         "asset_type": "cache",
         "criticality": "high",
-        "endpoints": {},
+        # D7：容器身份显式登记（D6 规则：资产登记是容器身份唯一权威），
+        # 不再依赖「实例前缀 + 资产名」推导
+        "endpoints": {"container_name": "opspilot-demo-redis"},
     },
     {
         # S2 注入对象：opspilot-demo-crasher（经 docker-ro-proxy 只读观测）

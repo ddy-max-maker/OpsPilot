@@ -1,0 +1,7 @@
+# 构建上下文为 ./web：只把控制台源码送进构建，避免 node_modules/dist/E2E 产物
+console/node_modules
+console/dist
+console/test-results
+console/playwright-report
+console/e2e
+static
