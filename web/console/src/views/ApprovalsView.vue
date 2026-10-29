@@ -138,7 +138,7 @@ onMounted(load);
             <td><StatusBadge :value="p.environment" /></td>
             <td><StatusBadge :value="p.risk_level" /></td>
             <td><StatusBadge :value="p.status" /></td>
-            <td class="mono muted">{{ p.created_by_user?.slice(0,14) ?? p.created_by.slice(0,14) }}</td>
+            <td class="mono muted" :title="p.created_by_user ?? p.created_by">{{ p.created_by_user ?? p.created_by }}</td>
             <td class="mono muted">{{ p.created_at?.slice(0,19).replace("T"," ") }}</td>
             <td><router-link :to="`/approvals/${p.id}`" class="btn btn-sm">详情</router-link></td>
           </tr>

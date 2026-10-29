@@ -37,3 +37,6 @@ wheelhouse/
 web/console/test-results/
 web/console/test-results.old*/
 web/console/playwright-report/
+
+# 现场演示临时产物（路由输出 / 临时截图 / token）
+.demo-tmp/

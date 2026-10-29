@@ -61,15 +61,15 @@ onMounted(() => load());
         <thead><tr><th>时间</th><th>主体</th><th>动作</th><th>资源</th><th>环境</th><th>详情</th><th>request_id</th></tr></thead>
         <tbody>
           <tr v-for="e in items" :key="e.id">
-            <td class="mono muted" style="font-size:11px">{{ e.created_at?.slice(0,19).replace("T"," ") }}</td>
-            <td><span class="badge b-gray">{{ e.actor_type }}</span> <span class="mono muted" style="font-size:11px">{{ e.actor_id.slice(0,12) }}</span></td>
+            <td class="mono muted" style="font-size:11px;white-space:nowrap">{{ e.created_at?.slice(0,19).replace("T"," ") }}</td>
+            <td><span class="badge b-gray">{{ e.actor_type }}</span> <span class="mono muted" style="font-size:11px" :title="e.actor_id">{{ e.actor_id.slice(0,12) }}…</span></td>
             <td class="mono">{{ e.action }}</td>
-            <td class="mono muted" style="font-size:11px">{{ e.resource_type ?? "" }} {{ e.resource_id?.slice(0,14) ?? "" }}</td>
+            <td class="mono muted" style="font-size:11px">{{ e.resource_type ?? "" }} {{ e.resource_id ?? "" }}</td>
             <td>{{ e.environment ?? "—" }}</td>
             <td class="mono" style="font-size:11px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
               {{ e.detail ? JSON.stringify(e.detail) : "—" }}
             </td>
-            <td class="mono muted" style="font-size:10px">{{ e.request_id.slice(0,10) }}</td>
+            <td class="mono muted" style="font-size:10px" :title="e.request_id">{{ e.request_id.slice(0,10) }}…</td>
           </tr>
         </tbody>
       </table>

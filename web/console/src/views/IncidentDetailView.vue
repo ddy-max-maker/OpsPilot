@@ -84,7 +84,14 @@ onMounted(load);
       <RunPanel :run-id="runId" :key="runId" />
     </template>
     <div v-else class="panel">
-      <div class="state">本事件尚未发起诊断。点击「启动 Agent 诊断」开始（完成后本机记录 run 标识以便回看）。</div>
+      <div class="state">
+        这里查不到本事件的历史诊断：控制台没有「事件 → run」的反查接口（契约冻结，未新增端点），
+        因此无法区分「确实还没诊断过」与「诊断过但本机没有记录」。
+        <template v-if="canDiagnose">
+          若已知 run 标识，请到「诊断详情」粘贴查看；点击右上「启动 Agent 诊断」会新建一次只读取证。
+        </template>
+        <template v-else>若已知 run 标识，请到「诊断详情」粘贴查看。</template>
+      </div>
     </div>
   </StateBlock>
 </template>
