@@ -142,10 +142,12 @@ async def main() -> int:
                         status="active",
                         criticality="medium",
                         endpoints=endpoints,
+                        tags=[],
                     )
                 )
             else:
                 existing_asset.endpoints = endpoints
+                existing_asset.tags = existing_asset.tags or []
         await session.commit()
     await engine.dispose()
     print(f"e2e users ready: {[u[1] for u in USERS]}; assets: {[a[1] for a in ASSETS]}")

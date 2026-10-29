@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.enums import AssetStatus, AssetType, Criticality, Environment
 
@@ -75,6 +75,12 @@ class AssetResponse(BaseModel):
     tags: list[str]
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _null_tags_as_empty(cls, value: object) -> object:
+        """DB 行 tags 为 NULL（非 API 写入：种子/迁移）时归一为空列表，避免列表整体 500。"""
+        return [] if value is None else value
 
 
 class AssetListData(BaseModel):
