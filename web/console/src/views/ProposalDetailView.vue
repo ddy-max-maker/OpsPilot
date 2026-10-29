@@ -169,7 +169,7 @@ onMounted(() => {
           <tbody>
             <tr v-for="a in detail.approvals" :key="a.id">
               <td><StatusBadge :value="a.decision === 'approved' ? 'approved' : 'rejected'" /></td>
-              <td class="mono muted">{{ a.decided_by.slice(0,14) }}</td>
+              <td class="mono muted" :title="a.decided_by">{{ a.decided_by }}</td>
               <td class="muted">{{ a.comment ?? "—" }}</td>
               <td class="mono muted">{{ a.decided_at?.slice(0,19).replace("T"," ") }}</td>
             </tr>
