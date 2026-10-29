@@ -93,6 +93,12 @@ class _Client:
         except urllib.error.HTTPError as exc:  # 4xx/5xx 也要能读到 envelope
             return _Response(exc.code, exc.read().decode("utf-8", "replace"))
 
+    def __enter__(self) -> _Client:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
     def get(
         self,
         url: str,
