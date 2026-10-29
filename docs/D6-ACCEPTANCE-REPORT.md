@@ -11,7 +11,8 @@
 | 项 | 值 |
 |---|---|
 | 分支 / 远端 | `main` → `https://github.com/ddy-max-maker/OpsPilot` |
-| D6 提交链 | `bd7cd0b` → `a7c94e4`（评估 39/39）→ `3aca4dd`（D6 说明）→ `7a83626`（控制台）→ `887df8a`（门禁接线+holdout）→ `3ef2493`（E2E+脚本+CI）→ `d3d38e5`（CI 修复）→ `d5334dc`（资产 NULL tags 修复） |
+| D6 提交链 | `bd7cd0b` → `a7c94e4`（评估 39/39）→ `3aca4dd`（D6 说明）→ `7a83626`（控制台）→ `887df8a`（门禁接线+holdout）→ `3ef2493`（E2E+脚本+CI）→ `d3d38e5`（CI 修复）→ `d5334dc`（tags 归一）→ `24ede3d`（资产 endpoints 根因修复）→ 本报告 |
+| 远程 CI | CI `40831046827` success；d6 `40831046861` success |
 | 工作区 | 干净（提交后 `git status` 无输出） |
 | 本地/远端 | 一致（push 无拒绝，`origin/main` 与本地同步） |
 
@@ -72,6 +73,8 @@ D6 期间的调试过程、12 处评估修复根因记录见 `docs/D6-DELIVERY.m
 | 07 | 刷新后状态从数据库恢复 | `?run=` 恢复 + `reload()` 后轨迹重建 |
 
 本地（compose 栈 + 真实 Postgres/RabbitMQ）：**7 passed（41.4s）**。
+
+远程 GitHub Actions（d6 `e2e` job，ubuntu-latest + pgvector + RabbitMQ + 显式开启的 fake provider + `ACTION_EXECUTION_ENABLED=false`）：**7 passed（22.0s）**，run `40831046861`。
 
 CI 首轮暴露两处真实缺陷，均已修复并复测：
 
@@ -158,15 +161,18 @@ token 统计为 `unavailable`（provider 未回传 usage），已在产物中如
 
 | 检查 | 本地 | 远程 |
 |---|---|---|
-| `ruff check .` | All checks passed | CI lint job ✓ |
-| `ruff format --check .` | 197 files already formatted | ✓（此前失败，已规范化 18 文件） |
-| `mypy app` | Success: 126 source files | ✓ |
-| `pytest -q`（真实 Postgres + RabbitMQ） | 317 passed, 1 skipped（296s） | CI test job ✓（含空库 `alembic upgrade head` + schema 对象核对） |
-| 前端 `vue-tsc` + `vite build` | 通过 | d6 `frontend` ✓ |
-| 评估报告 39/39 | 通过 | d6 `eval-report` ✓ |
-| Playwright E2E | 7/7（41.4s） | d6 `e2e` ✓ |
+| `ruff check .` | All checks passed | CI lint job `success` |
+| `ruff format --check .` | 197 files already formatted | `success`（此前失败，已规范化 18 文件） |
+| `mypy app` | Success: 126 source files | `success` |
+| `pytest -q`（真实 Postgres + RabbitMQ） | 317 passed, 1 skipped（296s） | CI test job `success`（含空库 `alembic upgrade head` + schema 对象核对） |
+| 前端 `vue-tsc` + `vite build` | 通过 | d6 `frontend` `success` |
+| 评估报告 39/39 | 通过 | d6 `eval-report` `success` |
+| Playwright E2E | 7/7（41.4s） | d6 `e2e` `success`（7/7，22.0s） |
 
+远程运行记录：CI `40831046827`（Lint & Type Check / Tests 全 success）、d6 `40831046861`（eval-report / frontend / e2e 全 success）。
 CI 工作流：`.github/workflows/ci.yml`（后端主门禁）+ `.github/workflows/d6.yml`（评估报告 / 前端构建 / 浏览器 E2E）。
+
+修复前的 4 次远程失败均定位到真实缺陷（不是配置糊弄）：`ruff format` 未规范化、`Settings` 必填密钥缺失、fake provider 开关未显式设置、种子资产 `endpoints` 越界字段导致资产列表 500。
 
 ---
 
