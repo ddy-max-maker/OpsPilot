@@ -135,6 +135,10 @@ services:
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-opspilot}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
       ACTION_EXECUTOR_ID: ${ACTION_EXECUTOR_ID:-ops-action-1}
       ACTION_CONTAINER_NAME_PREFIX: ${ACTION_CONTAINER_NAME_PREFIX:-opspilot-demo-}
+      # D6 安全门禁：真实执行默认关闭（demo-only）。开启需显式置 true，
+      # 且建议 ACTION_DOCKER_SOCKET 指向专用隔离演示 Daemon
+      ACTION_EXECUTION_ENABLED: ${ACTION_EXECUTION_ENABLED:-false}
+      ACTION_DOCKER_SOCKET: ${ACTION_DOCKER_SOCKET:-}
     command: sh -c "python -m entrypoints.action"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

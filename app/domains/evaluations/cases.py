@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EvaluationCase, EvaluationSuite
 
-DATASET_VERSION = "d6-eval-v1"
+DATASET_VERSION = "d6-eval-v2"  # v2：holdout 完整性处置后重新冻结（见 _HOLDOUT_KEYS 注释）
 
 # ---- 误导性/帮助性知识内容（RAG 消融共用；标记词用于判定期望） ----
 
@@ -40,11 +40,18 @@ _INJECTION_CONTENT = (
 )
 
 # 保留集 case_key（固定；不得因评估结果调整）
-_HOLDOUT_KEYS = frozenset(
+#
+# holdout 完整性审计（D6 交付，诚实性红线）：
+# v1 保留集 12 例中 2 例在调试提交 a7c94e4 中被直接修改——
+#   fault_redis_down_timeout：expected 的 top1_markers 被放宽（新增 REDIS_ERROR）
+#   fault_cross_service_trace：scenario 载荷被重写（jaeger processes / prometheus anomaly）
+# 这 2 例已暴露，降级回开发集；其余 10 例的案例数据自初版未改动，保留。
+# 新增 4 例（从未参与逐案例调试，仅受 a7c94e4 系统级公共修复影响）补足保留集，
+# 自本版本（d6-eval-v2，基线 commit 7a83626 起）重新冻结，此后不得为分数改动。
+_HOLDOUT_EXPOSED_V1 = frozenset({"fault_redis_down_timeout", "fault_cross_service_trace"})
+_HOLDOUT_KEPT_V1 = frozenset(
     {
-        "fault_redis_down_timeout",
         "fault_container_missing",
-        "fault_cross_service_trace",
         "fault_unknown_exit_budget0",
         "rag_text_misleading_resist",
         "rag_hybrid_misleading_resist",
@@ -56,6 +63,15 @@ _HOLDOUT_KEYS = frozenset(
         "rel_verification_window_flip",
     }
 )
+_HOLDOUT_ADDED_V2 = frozenset(
+    {
+        "fault_container_oom_exit",
+        "fault_mysql_connect_refuse",
+        "fault_java_stack_503",
+        "rel_stale_fence_rejected",
+    }
+)
+_HOLDOUT_KEYS = _HOLDOUT_KEPT_V1 | _HOLDOUT_ADDED_V2
 
 
 def _diagnosis_expected(
@@ -624,7 +640,8 @@ async def seed_dataset(session: AsyncSession) -> dict[str, int]:
     suite_rows = (await session.execute(select(EvaluationSuite))).scalars().all()
     suite_ids = {s.name: s.id for s in suite_rows}
 
-    existing_keys = set((await session.execute(select(EvaluationCase.case_key))).scalars().all())
+    existing_rows = (await session.execute(select(EvaluationCase))).scalars().all()
+    existing_keys = {r.case_key for r in existing_rows}
     created = 0
     for case in _build_cases():
         if case["case_key"] in existing_keys:
@@ -641,11 +658,20 @@ async def seed_dataset(session: AsyncSession) -> dict[str, int]:
             )
         )
         created += 1
+    # holdout 标志幂等同步（v2 重冻结后使已有行与新保留集一致；
+    # 只同步 holdout 布尔位，不改 scenario/expected —— 预期不可追溯改写）
+    resynced = 0
+    for row in existing_rows:
+        want = row.case_key in _HOLDOUT_KEYS
+        if bool(row.holdout) != want:
+            row.holdout = want
+            resynced += 1
     await session.commit()
     total = len(_build_cases())
     return {
         "cases_total": total,
         "cases_created": created,
+        "holdout_resynced": resynced,
         "holdout": len(_HOLDOUT_KEYS),
         "dev": total - len(_HOLDOUT_KEYS),
     }

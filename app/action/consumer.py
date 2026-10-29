@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.action import outbox as outbox_mod
+from app.action.docker_client import DockerClient
 from app.action.executor import ActionExecutor, OutcomeStatus
 from app.action.verification import verify_execution
 from app.core.config import Settings, get_settings
@@ -371,7 +372,15 @@ async def run_consumer(
 
     executor_id = executor_id or settings.action_executor_id or "ops-action"
     executor = executor or ActionExecutor(
-        container_name_prefix=settings.action_container_name_prefix
+        container_name_prefix=settings.action_container_name_prefix,
+        # D6 安全门禁接线：真实执行默认关闭（demo-only），须显式
+        # ACTION_EXECUTION_ENABLED=true 且配合隔离演示 Daemon 才开启
+        execution_enabled=settings.action_execution_enabled,
+        docker=(
+            DockerClient(socket_path=settings.action_docker_socket)
+            if settings.action_docker_socket
+            else None
+        ),
     )
     connection = await aio_pika.connect_robust(rabbitmq_url)
     try:

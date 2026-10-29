@@ -46,7 +46,7 @@ async def test_suites_endpoint_seeds_dataset(
     resp = await client.get("/api/v1/evaluations/suites", headers=ready)
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["dataset_version"] == "d6-eval-v1"
+    assert data["dataset_version"] == "d6-eval-v2"
     assert len(data["dataset_digest"]) == 16
     # ≥30 案例；开发集 + 保留集 = 全集；保留集固定非空
     stats = data["seed_stats"]
@@ -124,7 +124,7 @@ async def test_fault_suite_full_run(
     cfg = detail["config"]
     assert cfg["model_provider"] == "fake"
     assert cfg["git_commit"]
-    assert cfg["dataset_version"] == "d6-eval-v1"
+    assert cfg["dataset_version"] == "d6-eval-v2"
     assert cfg["prompt_version"]
     assert "rag_mode" in cfg and "budgets" in cfg
     # 全部案例通过（Fake Model 确定性管线）
