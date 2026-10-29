@@ -39,6 +39,11 @@
 
 ### 2.2 架构图
 
+![总体架构](diagrams/architecture.svg)
+
+> 图源：[diagrams/architecture.svg](diagrams/architecture.svg)（SVG，可离线查看）。
+> 下面同时保留 Mermaid 版本，便于在 GitHub/IDE 内直接渲染与 diff。
+
 ```mermaid
 flowchart TB
     subgraph Client["客户端"]
@@ -199,6 +204,11 @@ PostgreSQL 是唯一首版存储（PRD §7），内部按 schema / 表族隔离�
 
 ### 5.1 诊断主线（API 提交 → Agent 诊断 → 证据入库 → 报告）
 
+![故障诊断时序](diagrams/sequence-diagnosis.svg)
+
+> 图源：[diagrams/sequence-diagnosis.svg](diagrams/sequence-diagnosis.svg)。
+> 实测运行记录见 [DEMO_SCRIPT.md](DEMO_SCRIPT.md) 路线 A。
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -245,6 +255,12 @@ sequenceDiagram
 文字步骤对照 PRD §3：第 1–2 步对应"接入/准备"，第 3 步"知识召回"，第 4–5 步"规划与取证/分析"，第 6 步"提案"在 D5 后由 `Propose` 节点触发（见 5.2），第 9 步"复盘/沉淀"是人工把报告提交为知识草稿（D4），不自动自我强化。
 
 ### 5.2 受控处置线（Proposal → 审批 → Action → 验证，D5 起）
+
+![审批与受控执行时序](diagrams/sequence-approval.svg)
+
+> 图源：[diagrams/sequence-approval.svg](diagrams/sequence-approval.svg)。
+> 默认配置下第 16 步「门禁拒绝」就是终点；`verified` 全链路见
+> [SECURITY_ACCEPTANCE.md](SECURITY_ACCEPTANCE.md) 与 `tests/integration/test_action_flow.py`。
 
 ```mermaid
 sequenceDiagram

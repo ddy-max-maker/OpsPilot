@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 1100" width="1320" height="1100" font-family="-apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="ad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0369a1"/>
+    </marker>
+  </defs>
+  <rect width="1320" height="1100" fill="#ffffff"/>
+
+  <text x="36" y="40" font-size="20" font-weight="700" fill="#0f172a">故障诊断时序（A 路线：登记 → 受理 → Agent 取证 → 证据与报告落库）</text>
+  <text x="36" y="64" font-size="12.5" fill="#64748b">实线＝同步调用／写库，虚线＝返回。灰色为控制面，紫色为 Agent 运行时，青色为只读采集。</text>
+
+  <!-- 生命线头 -->
+  <g>
+    <rect x="40" y="92" width="150" height="54" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="115" y="116" font-size="12.5" font-weight="700" fill="#0f172a" text-anchor="middle">运维 / 控制台</text>
+    <text x="115" y="134" font-size="10.5" fill="#64748b" text-anchor="middle">Operator / UI</text>
+
+    <rect x="230" y="92" width="150" height="54" rx="8" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="305" y="116" font-size="12.5" font-weight="700" fill="#1d4ed8" text-anchor="middle">ops-api</text>
+    <text x="305" y="134" font-size="10.5" fill="#1e40af" text-anchor="middle">FastAPI 单体</text>
+
+    <rect x="420" y="92" width="160" height="54" rx="8" fill="#f0fdfa" stroke="#0f766e"/>
+    <text x="500" y="116" font-size="12.5" font-weight="700" fill="#0f766e" text-anchor="middle">PostgreSQL</text>
+    <text x="500" y="134" font-size="10.5" fill="#115e59" text-anchor="middle">业务库（权威）</text>
+
+    <rect x="620" y="92" width="140" height="54" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="690" y="116" font-size="12.5" font-weight="700" fill="#0f172a" text-anchor="middle">RabbitMQ</text>
+    <text x="690" y="134" font-size="10.5" fill="#64748b" text-anchor="middle">Outbox 投递</text>
+
+    <rect x="800" y="92" width="170" height="54" rx="8" fill="#f5f3ff" stroke="#7c3aed"/>
+    <text x="885" y="116" font-size="12.5" font-weight="700" fill="#6d28d9" text-anchor="middle">ops-worker</text>
+    <text x="885" y="134" font-size="10.5" fill="#5b21b6" text-anchor="middle">DeepAgents / LangGraph</text>
+
+    <rect x="1010" y="92" width="150" height="54" rx="8" fill="#f5f3ff" stroke="#7c3aed"/>
+    <text x="1085" y="116" font-size="12.5" font-weight="700" fill="#6d28d9" text-anchor="middle">Tool Gateway</text>
+    <text x="1085" y="134" font-size="10.5" fill="#5b21b6" text-anchor="middle">进程内强制层</text>
+
+    <rect x="1200" y="92" width="96" height="54" rx="8" fill="#fffbeb" stroke="#b45309"/>
+    <text x="1248" y="116" font-size="12" font-weight="700" fill="#b45309" text-anchor="middle">目标环境</text>
+    <text x="1248" y="134" font-size="10.5" fill="#92400e" text-anchor="middle">只读</text>
+  </g>
+
+  <!-- 生命线 -->
+  <g stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="5 5">
+    <line x1="115" y1="146" x2="115" y2="1040"/>
+    <line x1="305" y1="146" x2="305" y2="1040"/>
+    <line x1="500" y1="146" x2="500" y2="1040"/>
+    <line x1="690" y1="146" x2="690" y2="1040"/>
+    <line x1="885" y1="146" x2="885" y2="1040"/>
+    <line x1="1085" y1="146" x2="1085" y2="1040"/>
+    <line x1="1248" y1="146" x2="1248" y2="1040"/>
+  </g>
+
+  <!-- 阶段标签 -->
+  <text x="36" y="186" font-size="10.5" font-weight="700" fill="#94a3b8">① 接入</text>
+  <text x="36" y="436" font-size="10.5" font-weight="700" fill="#94a3b8">② 受理</text>
+  <text x="36" y="636" font-size="10.5" font-weight="700" fill="#94a3b8">③ 诊断</text>
+  <text x="36" y="912" font-size="10.5" font-weight="700" fill="#94a3b8">④ 报告</text>
+
+  <!-- 消息 -->
+  <g stroke="#334155" stroke-width="1.5" marker-end="url(#a)">
+    <line x1="115" y1="196" x2="298" y2="196"/>
+    <line x1="305" y1="246" x2="493" y2="246"/>
+    <line x1="115" y1="296" x2="298" y2="296"/>
+    <line x1="305" y1="346" x2="493" y2="346"/>
+    <line x1="305" y1="446" x2="683" y2="446"/>
+    <line x1="690" y1="496" x2="878" y2="496"/>
+    <line x1="885" y1="546" x2="493" y2="546"/>
+    <line x1="885" y1="596" x2="493" y2="596"/>
+    <line x1="1085" y1="686" x2="1241" y2="686"/>
+    <line x1="1085" y1="736" x2="493" y2="736"/>
+  </g>
+
+  <g stroke="#0369a1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ad)">
+    <line x1="305" y1="396" x2="122" y2="396"/>
+    <line x1="1085" y1="786" x2="892" y2="786"/>
+    <line x1="305" y1="986" x2="122" y2="986"/>
+  </g>
+
+  <!-- 自调用 -->
+  <path d="M 885 826 L 935 826 L 935 856 L 892 856" fill="none" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- 文本 -->
+  <g font-size="11.5" fill="#0f172a">
+    <text x="120" y="190">1. POST /incidents（Idempotency-Key）</text>
+    <text x="312" y="240">2. 事务：incident=OPEN ＋ 幂等键登记</text>
+    <text x="120" y="290">3. POST /incidents/{id}/investigations</text>
+    <text x="312" y="340">4. run=CREATED ＋ 授权范围快照 ＋ 预算</text>
+    <text x="120" y="390" fill="#0369a1">5. 202 Accepted {run_id}</text>
+    <text x="312" y="440">6. Outbox 与业务同事务写 run.start</text>
+    <text x="697" y="490">7. 投递（至少一次）</text>
+    <text x="500" y="540" text-anchor="end">8. run → QUEUED → RUNNING ＋ run_events</text>
+    <text x="500" y="590" text-anchor="end">9. 检索已发布知识（权限前置过滤）</text>
+    <text x="1092" y="680">10. 只读采集</text>
+    <text x="500" y="730" text-anchor="end">11. Evidence 落库（脱敏 ＋ 注入标记）</text>
+    <text x="888" y="780" fill="#0369a1">12. {evidence_id, status, summary}</text>
+    <text x="945" y="844" fill="#6d28d9" font-size="11.5">13. 假设 ↔ 证据校验（自循环）</text>
+    <text x="500" y="860" text-anchor="end">14. hypotheses ＋ diagnostic_reports（结论带 Evidence ID）</text>
+    <text x="500" y="910" text-anchor="end">15. run → COMPLETED / NEEDS_HUMAN（写终止原因）</text>
+    <text x="120" y="980">16. GET /runs/{id} · /evidence · /report</text>
+    <text x="120" y="1030" fill="#0369a1">17. 状态权威（SSE 为加速通道）</text>
+  </g>
+
+  <!-- 取证循环框 -->
+  <rect x="470" y="650" width="820" height="212" rx="8" fill="none" stroke="#7c3aed" stroke-dasharray="7 5"/>
+  <rect x="960" y="636" width="118" height="20" rx="4" fill="#f5f3ff" stroke="#7c3aed"/>
+  <text x="970" y="651" font-size="10.5" font-weight="700" fill="#6d28d9">loop 预算内</text>
+
+  <!-- 注释 -->
+  <g font-size="10.5" fill="#64748b">
+    <text x="700" y="530">① 重复投递由认领状态吸收</text>
+    <text x="700" y="580">② 知识只作排查方向，不进根因支撑集</text>
+    <text x="975" y="882">③ 连续无新证据 → 触发停止，不无限试探</text>
+    <text x="975" y="904">④ 报告失败 ≠ 结论未知：report_status 独立记录</text>
+  </g>
+
+  <rect x="36" y="1050" width="1260" height="36" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="52" y="1073" font-size="11.5" fill="#475569">要点：Agent 每一步取证都必须落成 Evidence 行（含 observed_at / status / 脱敏摘要 / data_ref），报告里的每个假设只能引用这些 Evidence ID。</text>
+</svg>
