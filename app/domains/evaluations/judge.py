@@ -47,7 +47,24 @@ async def judge_diagnosis(
         (await session.execute(select(Evidence).where(Evidence.run_id == run_id))).scalars().all()
     )
     evidence_ids = {e.id for e in evidence_rows}
-    knowledge_hits = sum(1 for e in evidence_rows if e.source_type == "knowledge")
+
+    def _kb_hit_count(e: Evidence) -> int:
+        ref = e.data_ref or {}
+        raw = ref.get("hit_count") if isinstance(ref, dict) else None
+        if not isinstance(raw, (int, str, float)):
+            return 0
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 0
+
+    # 知识命中 = 实际召回内容的知识证据（hit_count>0）；空检索的工具调用
+    # （hit_count=0，如过期知识被正确过滤）不构成"命中"
+    knowledge_hits = sum(
+        1
+        for e in evidence_rows
+        if e.source_type == "knowledge" and _kb_hit_count(e) > 0
+    )
     rag_latency_ms: list[int] = []
     for e in evidence_rows:
         if e.source_type == "knowledge" and e.status == "ok":

@@ -146,6 +146,8 @@ async def create_run(
     runner = EvaluationRunner(session_factory, settings)
     if wait:
         await runner.execute_run(run.id)
+        # execute_run 在独立会话中更新状态/汇总；刷新本会话内的过期 ORM 对象
+        await session.refresh(run)
     else:
         task = asyncio.create_task(runner.execute_run(run.id))
         _background_tasks.add(task)

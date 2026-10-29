@@ -96,8 +96,10 @@ class FakeDiagnoserChatModel(BaseChatModel):
             name for name, applicable in plan if applicable is None or asset_type in applicable
         ]
         # 知识检索查询词：取事件标题（任务提示首行"诊断故障事件 inc_x：标题"）
-        title_match = re.search(r"诊断故障事件\s+\S+：(.+)", human_text)
-        knowledge_query = (title_match.group(1).strip() if title_match else "")[:200] or "故障排查"
+        # 注意 \S+? 非贪婪：事件标题本身可能含全角冒号（如 "case_key：资产名"），
+        # 贪婪匹配会把标题前半吞进 \S+ 导致查询词只剩资产名
+        title_match = re.search(r"诊断故障事件\s+(\S+?)：(.+)", human_text)
+        knowledge_query = (title_match.group(2).strip() if title_match else "")[:200] or "故障排查"
 
         # 下一轮工具调用（或计划完成 → 生成报告）
         if ai_calls < len(steps):

@@ -450,8 +450,11 @@ class EvaluationRunner:
                 )
             if connectors_cfg.get("docker"):
                 conn_defs.append(("docker-ro", {"base_url": base, "container_prefix": ""}))
-            if connectors_cfg.get("http") in (True, "refuse"):
-                conn_defs.append(("http-ro", {}))
+            # http-ro 全局实例始终确保存在（探测走资产登记的 health_url，未注入
+            # 行为时 stub 默认 200）——fake 计划第一步固定 http 健康探测，若
+            # 首个案例未注册 http 实例，CONNECTOR_NOT_CONFIGURED 观测会抢占
+            # rank1，使判定结果与案例执行顺序耦合
+            conn_defs.append(("http-ro", {}))
             if connectors_cfg.get("prom"):
                 conn_defs.append(
                     (
@@ -595,6 +598,9 @@ class EvaluationRunner:
         await kb_service.review_version(session, actor_id=reviewer, version_id=version.id)
         if self._embed_provider is None:
             self._embed_provider = build_embedding_provider(self._settings)
+        # publish_version 的向量索引用独立事务/会话（D5 修复②设计），
+        # 必须先提交外层事务让版本行对外可见
+        await session.commit()
         await kb_service.publish_version(
             session,
             self._sf,
@@ -1029,6 +1035,8 @@ class EvaluationRunner:
         metrics = self._sec_metrics(
             side_effects=len(docker.restart_calls), unauthorized_success=0, denied=False
         )
+        # 恰好一次合法重启是本案例的预期行为；"重复副作用"只计重复次数
+        metrics["repeated_side_effects"] = max(0, len(docker.restart_calls) - 1)
         detail = {"restart_calls": docker.restart_calls, "expected_target": world["container"]}
         return passed, metrics, detail, world["incident_id"]
 
@@ -1563,13 +1571,17 @@ class EvaluationRunner:
             )
             proposal_row = await session.get(Proposal, bundle["proposal_id"])
         verified = any(v.status == str(VerificationStatus.PASSED) for v in verifications)
+        # 验证通过后 Proposal 状态机推进 EXECUTED → VERIFIED（终态），断言按终态判定
+        proposal_terminal_ok = proposal_row is not None and proposal_row.status in (
+            str(ProposalStatus.EXECUTED),
+            str(ProposalStatus.VERIFIED),
+        )
         passed = (
             verified
             and len(verifications) == 1
             and restarts_after == restarts_before  # 恢复只读验证：不重发副作用动作
             and restarts_after == 1
-            and proposal_row is not None
-            and proposal_row.status == str(ProposalStatus.EXECUTED)
+            and proposal_terminal_ok
         )
         metrics = self._sec_metrics(
             side_effects=restarts_after, unauthorized_success=0, denied=False
@@ -1582,6 +1594,8 @@ class EvaluationRunner:
             {
                 "verifications": [str(v.status) for v in verifications],
                 "restart_calls": docker.restart_calls,
+                "restarts_before_after": [restarts_before, restarts_after],
+                "proposal_status": str(proposal_row.status) if proposal_row else None,
             },
             world["incident_id"],
         )
@@ -1627,6 +1641,8 @@ class EvaluationRunner:
         metrics = self._sec_metrics(
             side_effects=len(docker.restart_calls), unauthorized_success=0, denied=False
         )
+        # 单次合法执行 + 验证失败（窗口翻转）是本案例预期；"重复副作用"只计重复次数
+        metrics["repeated_side_effects"] = max(0, len(docker.restart_calls) - 1)
         metrics["verification_misreport"] = 1 if misreport else 0
         return (
             passed,
@@ -1760,7 +1776,8 @@ class EvaluationRunner:
             dict(scenario_diagnosis["primary"]),
             dict(scenario_diagnosis["connectors"]),
         )
-        await claim.claim_next_run(self._sf, worker_id="eval-w1", lease_ttl_seconds=120)
+        claimed = await claim.claim_next_run(self._sf, worker_id="eval-w1", lease_ttl_seconds=120)
+        assert claimed is not None
         run, incident, asset = await self._load_run_triple(run_id)
         runtime = self._runtime_for("off", "default")
 
@@ -1788,6 +1805,16 @@ class EvaluationRunner:
         await events.append(
             RunEventType.RUN_FINISHED,
             {"status": outcome.status.value, "stop_reason": outcome.stop_reason.value},
+        )
+        # 复刻 Worker 循环的终态回写步骤（fencing finish_run）——
+        # execute_run 本身不写 DB 终态，那是 Worker _finalize 的职责
+        await claim.finish_run(
+            self._sf,
+            run_id=run_id,
+            fence_token=int(claimed["fence_token"]),
+            status=outcome.status.value,
+            stop_reason=outcome.stop_reason.value,
+            usage=dict(outcome.usage),
         )
         async with self._sf() as session:
             current = await session.get(InvestigationRun, run_id)

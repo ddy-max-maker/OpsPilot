@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -127,7 +128,9 @@ async def _text_route(
 
     D5 修复③：返回 (hit, route_score)——真实文本相关性分数进 retrieval_events。
     """
-    tokens = [t for t in query.split() if t]
+    # 分词：空白 + 常见中/英标点均视为分隔（"case_key：资产名" 这类
+    # 无空格查询词必须能拆出独立关键词，否则 ILIKE 整串匹配必然落空）
+    tokens = [t for t in re.split(r"[\s：:，,。；;、（）()\[\]【】]+", query) if t]
     likes = [f"%{t}%" for t in tokens]
     sql = text(
         f"""

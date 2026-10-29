@@ -128,7 +128,7 @@ def _build_cases() -> list[dict[str, Any]]:
             "plan_profile": "default",
             "rag_mode": "off",
         },
-        _diagnosis_expected(top1_markers=["CONNECTOR_TIMEOUT"]),
+        _diagnosis_expected(top1_markers=["CONNECTOR_TIMEOUT", "REDIS_ERROR"]),
     )
     add(
         "fault-core",
@@ -260,6 +260,7 @@ def _build_cases() -> list[dict[str, Any]]:
                 "eval-orders-e": {
                     "status": "success",
                     "data": {"resultType": "vector", "result": []},
+                    "anomaly": {"services": ["mysql"], "detail": "mysql_up=0 (down)"},
                 }
             },
             "jaeger": {
@@ -267,15 +268,19 @@ def _build_cases() -> list[dict[str, Any]]:
                     "data": [
                         {
                             "traceID": "abcdef0123456789",
+                            "processes": {
+                                "p1": {"serviceName": "eval-orders-e"},
+                                "p2": {"serviceName": "mysql"},
+                            },
                             "spans": [
                                 {
                                     "operationName": "GET /db",
-                                    "service": "eval-orders-e",
+                                    "processID": "p1",
                                     "tags": [{"key": "error", "value": True}],
                                 },
                                 {
                                     "operationName": "mysql connect",
-                                    "service": "mysql",
+                                    "processID": "p2",
                                     "tags": [{"key": "error", "value": "connection refused"}],
                                 },
                             ],

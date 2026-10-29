@@ -103,10 +103,13 @@ async def query_traces(
             status=EvidenceStatus.OK,
             payload={"traces": [], "note": "no traces matched (service/time range)"},
         )
-    return ConnectorResult(
-        status=EvidenceStatus.OK,
-        payload={"traces": [_summarize_trace(t) for t in data[:_RECENT_LIMIT]]},
-    )
+    payload: dict[str, Any] = {
+        "traces": [_summarize_trace(t) for t in data[:_RECENT_LIMIT]]
+    }
+    # 后端侧异常标注（如下游依赖错误 span）原样透传进摘要，供分析层引用
+    if body.get("anomaly") is not None:
+        payload["anomaly"] = body["anomaly"]
+    return ConnectorResult(status=EvidenceStatus.OK, payload=payload)
 
 
 def _trace_has_service(trace: dict[str, Any], service: str) -> bool:

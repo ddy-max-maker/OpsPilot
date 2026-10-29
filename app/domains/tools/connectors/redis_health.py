@@ -21,6 +21,7 @@ async def check_redis_health(
 ) -> ConnectorResult:
     """PING + INFO 基线；失败映射为 timeout/unavailable 的 ConnectorResult。"""
     import redis.asyncio as aioredis
+    import redis.exceptions as _redis_exceptions
 
     client = aioredis.from_url(
         dsn, socket_timeout=timeout_seconds, socket_connect_timeout=timeout_seconds
@@ -47,8 +48,24 @@ async def check_redis_health(
             payload={"target": _safe_endpoint(dsn)},
             error_code="CONNECTOR_TIMEOUT",
         )
+    except _redis_exceptions.TimeoutError:
+        # redis-py 的 TimeoutError 继承 RedisError 而非内建 TimeoutError，
+        # 读超时（socket_timeout）走这里
+        return ConnectorResult(
+            status=EvidenceStatus.TIMEOUT,
+            payload={"target": _safe_endpoint(dsn)},
+            error_code="CONNECTOR_TIMEOUT",
+        )
+    except _redis_exceptions.ConnectionError as exc:
+        # redis-py 的 ConnectionError 继承 RedisError 而非内建 OSError，
+        # 连接拒绝/网络不可达走这里（语义：目标不可用）
+        return ConnectorResult(
+            status=EvidenceStatus.UNAVAILABLE,
+            payload={"target": _safe_endpoint(dsn), "error_type": type(exc).__name__},
+            error_code="REDIS_UNAVAILABLE",
+        )
     except OSError as exc:
-        # ConnectionError/TimeoutError 均继承自 RedisError/OSError 家族
+        # 套接字级错误（内建 ConnectionError/TimeoutError 等）
         return ConnectorResult(
             status=EvidenceStatus.UNAVAILABLE,
             payload={"target": _safe_endpoint(dsn), "error_type": type(exc).__name__},

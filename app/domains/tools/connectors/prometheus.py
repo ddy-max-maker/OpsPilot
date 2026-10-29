@@ -99,14 +99,15 @@ async def query_metrics(
         )
     data = body.get("data") or {}
     result = data.get("result") or []
-    return ConnectorResult(
-        status=EvidenceStatus.OK,
-        payload={
-            "result_type": data.get("resultType"),
-            "series": [_summarize_series(r) for r in result[:_RESULT_SERIES_LIMIT]],
-            "series_truncated": len(result) > _RESULT_SERIES_LIMIT,
-        },
-    )
+    payload: dict[str, Any] = {
+        "result_type": data.get("resultType"),
+        "series": [_summarize_series(r) for r in result[:_RESULT_SERIES_LIMIT]],
+        "series_truncated": len(result) > _RESULT_SERIES_LIMIT,
+    }
+    # 后端侧异常标注（如 mysql_up=0）原样透传进摘要，供分析层引用
+    if body.get("anomaly") is not None:
+        payload["anomaly"] = body["anomaly"]
+    return ConnectorResult(status=EvidenceStatus.OK, payload=payload)
 
 
 def _summarize_series(entry: dict[str, Any]) -> dict[str, Any]:
