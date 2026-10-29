@@ -2,7 +2,8 @@
 import { http } from "./http";
 import type {
   Approval, Asset, AuditEvent, Capability, DryRunResult, Environment,
-  EvaluationRun, Evidence, Execution, Incident, Integration, KnowledgeDocument, KnowledgeHit,
+  EvaluationRun, Evidence, Execution, Incident, Integration, IntegrationType, KnowledgeDocument,
+  KnowledgeHit,
   MeData, Page, Proposal, ProposalDetail, Report, Run, RunEvent, Runbook, SuiteSummary,
   TokenData, Verification,
 } from "../types";
@@ -129,7 +130,12 @@ export const proposalsApi = {
 
 // ---------- integrations / capabilities ----------
 export const integrationsApi = {
-  list: () => http.get<{ items: Array<Integration & { config: Record<string, unknown> | null; tests?: Record<string, unknown> }> }>("/api/v1/integrations"),
+  list: () =>
+    http.get<{
+      types: IntegrationType[];
+      instances: Array<Integration & { config: Record<string, unknown> | null; tests?: Record<string, unknown> }>;
+      tests: unknown[];
+    }>("/api/v1/integrations"),
   create: (body: Record<string, unknown>) => http.post<Integration>("/api/v1/integrations", { body }),
   test: (id: string) =>
     http.post<Record<string, unknown>>(`/api/v1/integrations/${id}/test`),

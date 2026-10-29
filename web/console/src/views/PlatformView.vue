@@ -2,7 +2,7 @@
 // 平台域：Connector 实例 + Capability + 资产绑定
 import { onMounted, ref } from "vue";
 import { assetsApi, assetsApi as _a, integrationsApi } from "../api";
-import type { Asset, Capability } from "../types";
+import type { Asset, Capability, IntegrationType } from "../types";
 import StateBlock from "../components/StateBlock.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { toast, errorMessage } from "../toast";
@@ -11,12 +11,13 @@ import { auth } from "../auth";
 const loading = ref(true);
 const error = ref<string | null>(null);
 const integrations = ref<Array<{ id: string; name: string; connector_type: string; status: string }>>([]);
+const types = ref<IntegrationType[]>([]);
 const capabilities = ref<Capability[]>([]);
 const assets = ref<Asset[]>([]);
 const isAdmin = auth.hasRole("admin");
 
 const showCreate = ref(false);
-const cForm = ref({ connector_type: "prometheus", name: "" });
+const cForm = ref({ connector_type: "", name: "" });
 const busy = ref("");
 
 const bindAsset = ref("");
@@ -28,11 +29,21 @@ async function load() {
   error.value = null;
   try {
     const jobs: Array<Promise<void>> = [
-      integrationsApi.capabilities().then((r) => { capabilities.value = r.capabilities; }),
-      assetsApi.list({ limit: 200 }).then((r) => { assets.value = r.items; }),
+      integrationsApi.capabilities().then((r) => { capabilities.value = r.capabilities ?? []; }),
+      assetsApi.list({ limit: 200 }).then((r) => { assets.value = r.items ?? []; }),
     ];
     if (isAdmin) {
-      jobs.push(integrationsApi.list().then((r) => { integrations.value = r.items; }));
+      jobs.push(
+        integrationsApi.list().then((r) => {
+          // 后端返回 {types, instances, tests}（契约见 app/api/v1/integrations.py）；
+          // 早期前端按 {items} 解析，导致 instances 为 undefined、整页渲染失败
+          integrations.value = r.instances ?? [];
+          types.value = r.types ?? [];
+          if (!cForm.value.connector_type && (r.types ?? []).length) {
+            cForm.value.connector_type = r.types[0].code;
+          }
+        }),
+      );
     }
     await Promise.all(jobs);
   } catch (e) {
@@ -125,7 +136,9 @@ onMounted(load);
       <div class="form-grid">
         <label class="f">类型 *</label>
         <select v-model="cForm.connector_type">
-          <option v-for="t in ['prometheus','loki','jaeger','redis_health','docker_proxy','http_probe']" :key="t" :value="t">{{ t }}</option>
+          <option v-for="t in types" :key="t.code" :value="t.code">
+            {{ t.code }} — {{ t.display_name }}
+          </option>
         </select>
         <label class="f">名称 *</label><input v-model="cForm.name" />
       </div>
@@ -175,15 +188,18 @@ onMounted(load);
       <table class="tbl">
         <thead><tr><th>能力</th><th>连接器</th><th>数据源</th><th>只读</th><th>限流</th><th>超时</th><th>操作</th></tr></thead>
         <tbody>
-          <tr v-for="c in capabilities" :key="c.capability_id">
-            <td class="mono">{{ c.capability_id }}</td>
-            <td>{{ c.connector_type }}</td>
-            <td><span v-for="s in c.source_types" :key="s" class="badge b-gray" style="margin-right:4px">{{ s }}</span></td>
+          <tr v-for="c in capabilities" :key="c.capability_key">
+            <td class="mono">{{ c.capability_key }}</td>
+            <td class="mono">{{ c.collector }}</td>
+            <td><span class="badge b-gray">{{ c.source_type }}</span></td>
             <td><StatusBadge :value="c.read_only ? 'passed' : 'failed'" /></td>
-            <td class="mono muted">{{ c.rate_limit ?? "—" }}</td>
+            <td class="mono muted">
+              {{ c.rate_limit?.max_calls_per_run ?? "—" }}/run ·
+              {{ c.rate_limit?.per_second ?? "—" }}/s
+            </td>
             <td class="mono muted">{{ c.timeout_ms ?? "—" }}ms</td>
             <td>
-              <button v-if="isAdmin" class="btn btn-sm" :disabled="busy === `cap-${c.capability_id}`" @click="testCapability(c.capability_id)">测试</button>
+              <button v-if="isAdmin" class="btn btn-sm" :disabled="busy === `cap-${c.capability_key}`" @click="testCapability(c.capability_key)">测试</button>
             </td>
           </tr>
         </tbody>

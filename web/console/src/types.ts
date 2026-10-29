@@ -327,17 +327,27 @@ export interface Integration {
   connector_type: string;
   status: "enabled" | "disabled";
 }
-export interface Capability {
-  capability_id: string;
-  connector_type: string;
-  version: string;
-  source_types: string[];
+/** 连接器类型（GET /integrations 的 types[]，D7 起创建表单以此为准而非硬编码） */
+export interface IntegrationType {
+  id: string;
+  code: string;
+  display_name: string;
   read_only: boolean;
-  scopes: string[];
-  rate_limit: string | null;
-  timeout_ms: number | null;
+  manifest_version?: string;
+}
+/** 能力注册中心条目（GET /capabilities 的 capabilities[]，字段以后端 manifest 为准） */
+export interface Capability {
+  capability_key: string;
+  source_type: string;
+  collector: string;
+  description?: string;
+  input_model?: string;
+  read_only: boolean;
+  scopes?: { environments?: string[]; asset_types?: string[] };
+  rate_limit?: { max_calls_per_run?: number; per_second?: number };
+  timeout_ms?: number | null;
   enabled: boolean;
-  compatibility: Record<string, unknown>;
+  compatibility?: Record<string, unknown>;
 }
 export interface Binding {
   id: string;

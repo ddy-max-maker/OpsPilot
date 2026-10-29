@@ -206,3 +206,20 @@ test("07 刷新后诊断状态从数据库恢复", async ({ page }) => {
   await expect(page.locator(".timeline").first()).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("实时轨迹")).toBeVisible();
 });
+
+// ---------- 8. 导航冒烟：每个导航域都能渲染且无未捕获 JS 异常 ----------
+// 背景：D7 发现 /platform 因接口字段名漂移（items vs instances）整页空白，
+// E2E 当时只覆盖了知识/审批，页面级白屏没有被任何用例拦住。
+test("08 导航域渲染冒烟（无 JS 异常）", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+
+  await login(page, "e2e_admin");
+  const routes = ["/", "/assets", "/diagnostics", "/knowledge", "/runbooks", "/approvals", "/platform", "/evaluations", "/audit"];
+  for (const route of routes) {
+    await page.goto(route);
+    await expect(page.locator(".panel").first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator("body")).not.toHaveText(/^\s*OpsPilot Console[\s\S]*退出\s*$/);
+  }
+  expect(errors, `未捕获异常：${errors.join(" | ")}`).toHaveLength(0);
+});
