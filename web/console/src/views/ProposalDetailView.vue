@@ -187,7 +187,7 @@ onMounted(() => {
               <td class="mono">{{ e.action_key }}</td>
               <td><StatusBadge :value="e.status" /></td>
               <td class="mono" style="font-size:11px">{{ JSON.stringify(e.result_detail)?.slice(0,140) }}</td>
-              <td class="mono muted" style="font-size:11px">{{ e.started_at?.slice(0,19).replace("T"," ") ?? "—" }}</td>
+              <td class="mono muted" style="font-size:11px;white-space:nowrap">{{ e.started_at?.slice(0,19).replace("T"," ") ?? "—" }}</td>
             </tr>
           </tbody>
         </table>
