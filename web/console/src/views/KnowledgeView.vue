@@ -124,12 +124,14 @@ onMounted(load);
         <template v-else>　（rag_mode=off，知识检索未启用）</template>
       </div>
       <table class="tbl" v-if="hits.length">
-        <thead><tr><th>文档</th><th>类型</th><th>版本</th><th>内容摘录</th></tr></thead>
+        <thead><tr><th>文档</th><th>类型</th><th>版本</th><th title="全文（BM25）路排名，— 表示该路未召回">全文</th><th title="向量路排名，— 表示该路未召回">向量</th><th>内容摘录</th></tr></thead>
         <tbody>
           <tr v-for="h in hits" :key="h.version_id">
             <td>{{ h.title }}<div class="mono muted">{{ h.document_id }}</div></td>
             <td><StatusBadge :value="h.doc_type" /></td>
             <td class="mono">v{{ h.version_no }}</td>
+            <td class="mono" style="text-align:center">{{ h.ranks?.text ?? "—" }}</td>
+            <td class="mono" style="text-align:center">{{ h.ranks?.vector ?? "—" }}</td>
             <td class="mono" style="font-size:11px">{{ h.content.slice(0, 200) }}</td>
           </tr>
         </tbody>
@@ -179,7 +181,7 @@ onMounted(load);
               <td class="mono">v{{ v.version_no }}</td>
               <td><StatusBadge :value="v.status" /></td>
               <td class="muted">{{ v.change_note ?? "—" }}</td>
-              <td class="mono muted">{{ v.created_by.slice(0,12) }}<template v-if="v.reviewed_by"> / {{ v.reviewed_by.slice(0,12) }}</template></td>
+              <td class="mono muted" :title="`创建 ${v.created_by}${v.reviewed_by ? ' / 复核 ' + v.reviewed_by : ''}`">{{ v.created_by }}<template v-if="v.reviewed_by"> / {{ v.reviewed_by }}</template></td>
               <td class="mono muted">{{ v.published_at?.slice(0,19).replace("T"," ") ?? "—" }}</td>
               <td v-if="isAdmin">
                 <button v-if="v.status === 'draft'" class="btn btn-sm" :disabled="busyVersion.has(v.id)" @click="versionAction(v, 'review')">复核</button>

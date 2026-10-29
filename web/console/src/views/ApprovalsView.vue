@@ -134,7 +134,7 @@ onMounted(load);
         <tbody>
           <tr v-for="p in proposals" :key="p.id">
             <td><router-link :to="`/approvals/${p.id}`" style="color:var(--primary)" class="mono">{{ p.id }}</router-link>
-              <div class="muted" style="font-size:12px">run: {{ p.run_id?.slice(0,16) }}</div></td>
+              <div class="muted mono" style="font-size:12px" :title="p.run_id">run: {{ p.run_id?.slice(0,16) }}…</div></td>
             <td><StatusBadge :value="p.environment" /></td>
             <td><StatusBadge :value="p.risk_level" /></td>
             <td><StatusBadge :value="p.status" /></td>

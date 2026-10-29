@@ -229,6 +229,8 @@ export interface KnowledgeHit {
   published_at: string | null;
   content: string;
   scores: Record<string, unknown>;
+  // 双路召回排名：缺失的键表示该路未召回（null 同理），用来观察 RRF 融合来源
+  ranks?: { text?: number | null; vector?: number | null };
   final_rank: number | null;
   rrf_score: number | null;
 }
