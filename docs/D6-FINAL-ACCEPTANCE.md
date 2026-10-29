@@ -214,12 +214,18 @@ E2E 首轮出现 3 失败（04 知识发布、05/06 登录卡死）。逐层取�
 
 ## 8. CI 与远程验证
 
-| 工作流 | 状态 |
-|---|---|
-| `.github/workflows/ci.yml`（lint + 真实 Postgres 迁移/pytest） | 见文末记录 |
-| `.github/workflows/d6.yml`（eval-report 39 例 / frontend / e2e 7 用例） | 见文末记录 |
+远程实测（提交 `a43cec6`，main 分支）：
+
+| 工作流 | 运行号 | 结论 | 作业明细 |
+|---|---|---|---|
+| `ci.yml`（lint + 真实 Postgres 迁移/pytest） | **40841942268** | **success** | Lint & Type Check (Ruff + mypy): success；Tests (real PostgreSQL + Alembic drill): success |
+| `d6.yml`（39 例评估 / 前端 / 浏览器 E2E） | **40841942154** | **success** | eval-report: success；frontend: success；**e2e: success** |
 
 CI 的 eval-report 产物改为 `docs/eval/fake_ci_report_judge_v2.json`（保留旧文件，不覆盖历史成绩）。
+
+> 说明：CI 的 e2e job 用 `EMBEDDING_PROVIDER=fake`（确定性哈希向量，零加载成本），因此 §7.1 那个「每次发布重建 Provider → 反复加载本地 e5」的缺陷**在 CI 里不会暴露**，只在本地 `local_e5` 栈上出现。这正是本地 E2E 与 CI E2E 需要同时存在的原因；本轮据此补上了 API 启动预热与单例复用。
+
+> 上一轮（提交 `eafb3d5`）的运行号：CI `40831516083`、d6 `40831516079`，均为 success，可作对照。
 
 ## 9. 残余风险
 
@@ -260,4 +266,5 @@ cd web/console && npx playwright test --reporter=list
 - 安全默认值：`app/action/executor.py`、`app/action/consumer.py::run_consumer`、`entrypoints/action.py`
 - 评估护栏：`scripts/eval_real_model.py::_guard_database`
 - 盲测集：`app/domains/evaluations/blind_cases.py`
-- 提交：见 `git log --oneline -1`（本报告随提交入库）
+- 发布性能缺陷修复：`app/api/v1/knowledge.py::_provider`、`app/main.py::_warm_embeddings`、`app/domains/rag/embeddings.py::LocalE5EmbeddingProvider.warm_up`
+- 提交：`a43cec6`（本报告随提交入库）；远程 CI：CI `40841942268`、d6 `40841942154`
