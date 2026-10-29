@@ -29,8 +29,9 @@
 
 ## 1. L1：确定性工程测试（39 例，CI 每次运行）
 
-来源：`docs/eval/fake_ci_report_judge_v2.json`（`git_commit=eafb3d5`，2026-10-29T07:44:17Z）。
-历史版本 `fake_ci_report.json`（judge-v1，`git_commit=887df8a`）原样保留。
+来源：`docs/eval/fake_ci_report_judge_v2.json`（`git_commit=8f1dcfa`，2026-10-29T10:48:23Z，D7 终稿复跑）。
+更早的 D6 运行记录（`git_commit=eafb3d5`，2026-10-29T07:44:17Z）结果相同；
+judge-v1 时代的 `fake_ci_report.json`（`git_commit=887df8a`）原样保留。
 
 | 套件 | 通过 | 覆盖什么 |
 | --- | --- | --- |

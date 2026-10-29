@@ -190,6 +190,7 @@ OpsPilot-Next/
 | 安全边界与门禁证据 | [SECURITY_ACCEPTANCE.md](docs/SECURITY_ACCEPTANCE.md) |
 | 踩过哪些坑、怎么定位的 | [FAILURE_POSTMORTEMS.md](docs/FAILURE_POSTMORTEMS.md) |
 | 看界面长什么样 | [docs/screenshots/](docs/screenshots/)（真实栈采集，含证据链与审批门禁） |
+| 准备面试 / 答辩 | [interview_notes.md](docs/interview_notes.md)（25 个追问，全部锚到源码） |
 | 设计阶段冻结契约 | [PRD.md](docs/PRD.md) · [CONTRACTS.md](docs/CONTRACTS.md) · [DATA_MODEL.md](docs/DATA_MODEL.md) · [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) |
 
 ---
