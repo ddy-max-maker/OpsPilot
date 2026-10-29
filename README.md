@@ -183,6 +183,7 @@ OpsPilot-Next/
 | 想干什么 | 看这个 |
 | --- | --- |
 | 跑起来 / 排障 / 生产缺口 | [DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) |
+| 想自己点一遍（三条流程） | [TRY_IT.md](docs/TRY_IT.md)（含「预期内的失败」对照表） |
 | 三条演示路线怎么走、看到什么 | [DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) |
 | 调接口 | [API_REFERENCE.md](docs/API_REFERENCE.md)（或 `/docs`） |
 | 理解设计取舍 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) · [ADR-D2](docs/ADR-D2-EXECUTION-CORE.md) |
