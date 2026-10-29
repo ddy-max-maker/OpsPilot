@@ -74,7 +74,9 @@ async def main(out_path: str) -> int:
     from psycopg_pool import AsyncConnectionPool  # noqa: PLC0415
 
     pool = AsyncConnectionPool(
-        conninfo=settings.psycopg_database_url, max_size=4, open=False,
+        conninfo=settings.psycopg_database_url,
+        max_size=4,
+        open=False,
         kwargs={"autocommit": True},
     )
     await pool.open()
@@ -108,7 +110,7 @@ async def main(out_path: str) -> int:
                         "summary": (stored.config or {}).get("summary", {}),
                     }
                 )
-                summary = (stored.config or {}).get('summary', {})
+                summary = (stored.config or {}).get("summary", {})
                 print(f"{suite_name}: {stored.status} {json.dumps(summary)}")
     finally:
         await runner._stubs.stop()

@@ -225,9 +225,7 @@ class _RawStream:
             await self.task
 
 
-async def _open_raw_stream(
-    app: object, path: str, headers: dict[str, str]
-) -> _RawStream:
+async def _open_raw_stream(app: object, path: str, headers: dict[str, str]) -> _RawStream:
     """以原生 ASGI 协议发起请求，逐消息消费响应体（用于运行中流的增量观测）。"""
     scope = {
         "type": "http",

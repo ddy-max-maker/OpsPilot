@@ -24,9 +24,24 @@ from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.core.security import hash_password  # noqa: E402
-from app.models import AssetAccessPolicy, Role, User, UserRole  # noqa: E402
+from app.models import Asset, AssetAccessPolicy, Role, User, UserRole  # noqa: E402
 
 E2E_PASSWORD = "E2ePassw0rd!2026"
+# 恢复目标资产：容器名必须在该资产 endpoints 中登记（D6 加固：资产登记是唯一权威）。
+# CI 无本地 demo 数据，因此这里幂等补种，供「方案创建 → 执行」链路使用。
+ASSETS = [
+    (
+        "as_e2e_demo_redis",
+        "demo-redis",
+        "sandbox",
+        "cache",
+        {
+            "container_name": "opspilot-demo-redis",
+            "host": "opspilot-demo-redis",
+            "port": 6379,
+        },
+    ),
+]
 ROLES = [
     ("rol_operator", "operator", "运维操作员"),
     ("rol_approver", "approver", "审批人"),
@@ -103,13 +118,37 @@ async def main() -> int:
                 if existing_pol is None:
                     session.add(
                         AssetAccessPolicy(
-                            id=pol_id, user_id=uid, permission=perm,
-                            asset_id=None, environment=None,
+                            id=pol_id,
+                            user_id=uid,
+                            permission=perm,
+                            asset_id=None,
+                            environment=None,
                         )
                     )
+        # 恢复目标资产（幂等：按 (name, environment) 判重）
+        for aid, name, env, asset_type, endpoints in ASSETS:
+            existing_asset = (
+                await session.execute(
+                    select(Asset).where(Asset.name == name, Asset.environment == env)
+                )
+            ).scalar_one_or_none()
+            if existing_asset is None:
+                session.add(
+                    Asset(
+                        id=aid,
+                        name=name,
+                        environment=env,
+                        asset_type=asset_type,
+                        status="active",
+                        criticality="medium",
+                        endpoints=endpoints,
+                    )
+                )
+            else:
+                existing_asset.endpoints = endpoints
         await session.commit()
     await engine.dispose()
-    print(f"e2e users ready: {[u[1] for u in USERS]}")
+    print(f"e2e users ready: {[u[1] for u in USERS]}; assets: {[a[1] for a in ASSETS]}")
     return 0
 
 

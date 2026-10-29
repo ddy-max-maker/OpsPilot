@@ -413,9 +413,7 @@ class EvaluationRunner:
             stubs.redis_behavior = "ok"
 
         async with self._sf() as session:
-            await _ensure_user(
-                session, f"usr_ev_{ns}"[:60], f"eval_{ns}"[-30:], ["operator"]
-            )
+            await _ensure_user(session, f"usr_ev_{ns}"[:60], f"eval_{ns}"[-30:], ["operator"])
             session.add(
                 Asset(
                     id=asset_id,

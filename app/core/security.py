@@ -33,9 +33,7 @@ def verify_password(password_hash: str, plain: str) -> bool:
         return False
 
 
-def create_access_token(
-    subject: str, secret: str, expires_minutes: int
-) -> tuple[str, int, str]:
+def create_access_token(subject: str, secret: str, expires_minutes: int) -> tuple[str, int, str]:
     """签发 HS256 access token，返回 (token, expires_in 秒, jti)。"""
     now = datetime.now(UTC)
     expires_delta = timedelta(minutes=expires_minutes)

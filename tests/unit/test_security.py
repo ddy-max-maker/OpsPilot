@@ -1,4 +1,4 @@
-﻿"""安全原语单元测试：argon2 哈希 / JWT 签发与校验。"""
+"""安全原语单元测试：argon2 哈希 / JWT 签发与校验。"""
 
 from __future__ import annotations
 
@@ -88,4 +88,3 @@ def test_future_issued_token_accepted() -> None:
     token, _e, _jti = create_access_token("usr_1", SECRET, 30)
     time.sleep(0.01)
     assert decode_access_token(token, SECRET)["sub"] == "usr_1"
-

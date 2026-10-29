@@ -83,9 +83,7 @@ async def test_tampered_payload_action_key_ignored(
     assert docker.restart_calls == ["opspilot-demo-redis"]  # 仍是 DB 权威动作
 
 
-async def test_forged_proposal_link_dropped(
-    client, demo_world, db_session_factory
-) -> None:
+async def test_forged_proposal_link_dropped(client, demo_world, db_session_factory) -> None:
     """消息声称的 proposal 与执行记录不符（伪造通知）→ 直接丢弃，零副作用。"""
     bundle = await _enqueue_execution(client, demo_world)
     executor, docker = _executor()
@@ -97,8 +95,8 @@ async def test_forged_proposal_link_dropped(
     assert docker.restart_calls == []  # 零副作用
     async with db_session_factory() as session:
         execution = (
-            (await session.execute(text("SELECT status FROM action_executions"))).scalar_one()
-        )
+            await session.execute(text("SELECT status FROM action_executions"))
+        ).scalar_one()
         assert execution == "pending"  # 未被消费
 
 
@@ -114,21 +112,19 @@ async def test_asset_without_registered_container_cannot_execute(
         await session.commit()
     executor, docker = _executor()
     await handle_execute_requested(
-        db_session_factory, executor, bundle["payload"], executor_id="x",
+        db_session_factory,
+        executor,
+        bundle["payload"],
+        executor_id="x",
         settings=_fast_settings(),
     )
     assert docker.restart_calls == []  # 零副作用
     async with db_session_factory() as session:
         status = (
-
-                await session.execute(
-                    text(
-                        "SELECT status FROM action_executions "
-                        "WHERE id = :eid"
-                    ),
-                    {"eid": bundle["execution_id"]},
-                )
-
+            await session.execute(
+                text("SELECT status FROM action_executions WHERE id = :eid"),
+                {"eid": bundle["execution_id"]},
+            )
         ).scalar_one()
         assert status == "skipped"
 
@@ -142,14 +138,17 @@ async def test_db_parameter_tampering_detected_by_hash_recompute(
         await session.execute(
             text(
                 "UPDATE proposals SET parameters = parameters || "
-                '\'{"timeout_seconds": 1}\'::jsonb WHERE id = :pid'
+                "'{\"timeout_seconds\": 1}'::jsonb WHERE id = :pid"
             ),
             {"pid": bundle["proposal_id"]},
         )
         await session.commit()
     executor, docker = _executor()
     await handle_execute_requested(
-        db_session_factory, executor, bundle["payload"], executor_id="x",
+        db_session_factory,
+        executor,
+        bundle["payload"],
+        executor_id="x",
         settings=_fast_settings(),
     )
     assert docker.restart_calls == []  # 零副作用
@@ -168,7 +167,10 @@ async def test_execution_disabled_by_default_zero_side_effects(
         container_name_prefix="opspilot-demo-", docker=docker, execution_enabled=False
     )
     await handle_execute_requested(
-        db_session_factory, executor, bundle["payload"], executor_id="x",
+        db_session_factory,
+        executor,
+        bundle["payload"],
+        executor_id="x",
         settings=_fast_settings(),
     )
     assert docker.restart_calls == []  # 默认配置零副作用
@@ -267,14 +269,20 @@ async def test_verify_execution_idempotent_on_reentry(
         assert proposal is not None
 
     s1 = await verification_mod.verify_execution(
-        db_session_factory, execution_id=bundle["execution_id"], proposal=proposal,
+        db_session_factory,
+        execution_id=bundle["execution_id"],
+        proposal=proposal,
         context={"container_name": "opspilot-demo-redis", "requested_at": None},
-        executor_id="x", settings=settings,
+        executor_id="x",
+        settings=settings,
     )
     s2 = await verification_mod.verify_execution(
-        db_session_factory, execution_id=bundle["execution_id"], proposal=proposal,
+        db_session_factory,
+        execution_id=bundle["execution_id"],
+        proposal=proposal,
         context={"container_name": "opspilot-demo-redis", "requested_at": None},
-        executor_id="x", settings=settings,
+        executor_id="x",
+        settings=settings,
     )
     assert s1 == s2 == "passed"
     async with db_session_factory() as session:

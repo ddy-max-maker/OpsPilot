@@ -48,12 +48,12 @@ from app.models import EvaluationCase  # noqa: E402
 
 # 六类代表性故障（fault/rag 各套件中未被逐案例调试修改的案例优先）
 REAL_EVAL_CASES = [
-    "fault_redis_down_refuse",       # Redis 故障（连接拒绝）
-    "fault_container_oom_exit",      # Docker OOM
-    "fault_java_stack_503",          # Java 异常与依赖故障
-    "fault_mysql_connect_refuse",    # MySQL 连接异常
-    "fault_redis_down_timeout",      # 网关/工具超时（CONNECTOR_TIMEOUT）
-    "fault_unknown_exit_budget0",    # 未知故障：预算耗尽适当弃答
+    "fault_redis_down_refuse",  # Redis 故障（连接拒绝）
+    "fault_container_oom_exit",  # Docker OOM
+    "fault_java_stack_503",  # Java 异常与依赖故障
+    "fault_mysql_connect_refuse",  # MySQL 连接异常
+    "fault_redis_down_timeout",  # 网关/工具超时（CONNECTOR_TIMEOUT）
+    "fault_unknown_exit_budget0",  # 未知故障：预算耗尽适当弃答
     "rag_hybrid_misleading_resist",  # 历史知识误导抵抗（hybrid 检索）
 ]
 
@@ -161,7 +161,9 @@ async def main() -> int:
     from psycopg_pool import AsyncConnectionPool  # noqa: PLC0415
 
     pool = AsyncConnectionPool(
-        conninfo=settings.psycopg_database_url, max_size=4, open=False,
+        conninfo=settings.psycopg_database_url,
+        max_size=4,
+        open=False,
         kwargs={"autocommit": True},
     )
     await pool.open()

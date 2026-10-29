@@ -10,6 +10,13 @@ on:
 jobs:
   eval-report:
     runs-on: ubuntu-latest
+    env:
+      # Settings 必填项（CI 专用占位，非生产密钥）
+      JWT_SECRET: ci-eval-jwt-secret-not-for-production
+      WEBHOOK_ALERTS_SECRET: ci-eval-webhook-secret
+      AGENT_PROVIDER: fake
+      AGENT_FAKE_PROVIDER_ENABLED: "true"
+      EMBEDDING_PROVIDER: fake
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -106,8 +113,10 @@ jobs:
         run: uv sync --frozen
       - name: 迁移建 schema
         run: uv run alembic upgrade head
-      - name: 种子 E2E 账号
+      - name: 种子 E2E 账号与目标资产
         run: uv run python scripts/seed_e2e_users.py
+      - name: 启动演示容器（dry-run/健康检查的真实目标）
+        run: docker run -d --name opspilot-demo-redis -p 6379:6379 redis:7-alpine || true
       - name: 启动后端（API + Worker + Action 消费者）
         run: |
           uv run uvicorn entrypoints.api:app --host 127.0.0.1 --port 8000 &

@@ -61,9 +61,7 @@ async def judge_diagnosis(
     # 知识命中 = 实际召回内容的知识证据（hit_count>0）；空检索的工具调用
     # （hit_count=0，如过期知识被正确过滤）不构成"命中"
     knowledge_hits = sum(
-        1
-        for e in evidence_rows
-        if e.source_type == "knowledge" and _kb_hit_count(e) > 0
+        1 for e in evidence_rows if e.source_type == "knowledge" and _kb_hit_count(e) > 0
     )
     rag_latency_ms: list[int] = []
     for e in evidence_rows:

@@ -215,9 +215,7 @@ async def handle_execute_requested(
             return
         if execution.proposal_id != proposal_id:
             # 伪造通知：消息声称的 proposal 与执行记录不符 → 直接丢弃
-            logger.warning(
-                "message proposal_id mismatch for execution %s; dropping", execution_id
-            )
+            logger.warning("message proposal_id mismatch for execution %s; dropping", execution_id)
             return
         if execution.status != ActionExecutionStatus.PENDING:
             # 重复消息/重投：已进入后续状态 → 不再发起外部动作

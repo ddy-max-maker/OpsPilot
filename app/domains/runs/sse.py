@@ -80,9 +80,7 @@ async def stream_run_events(
         if rows:
             for event in rows:
                 cursor = int(event.seq)
-                yield sse_frame(
-                    event_id=cursor, event=_SSE_EVENT_NAME, data=_event_payload(event)
-                )
+                yield sse_frame(event_id=cursor, event=_SSE_EVENT_NAME, data=_event_payload(event))
             last_output = time.monotonic()
             continue  # 可能仍有积压，立即续拉（不带 sleep）
         if run is None:

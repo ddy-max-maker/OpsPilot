@@ -47,9 +47,7 @@ class EvaluationCase(Base, CreatedOnlyMixin):
     """评估案例：scenario（注入/输入/授权范围/副作用允许）+ expected（可判定预期）。"""
 
     __tablename__ = "evaluation_cases"
-    __table_args__ = (
-        Index("ix_evaluation_cases_suite_id", "suite_id"),
-    )
+    __table_args__ = (Index("ix_evaluation_cases_suite_id", "suite_id"),)
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     suite_id: Mapped[str] = mapped_column(ForeignKey("evaluation_suites.id"), nullable=False)
@@ -57,9 +55,7 @@ class EvaluationCase(Base, CreatedOnlyMixin):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     scenario: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     expected: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
-    holdout: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
-    )
+    holdout: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
 
 class EvaluationRun(Base, CreatedOnlyMixin):
@@ -92,9 +88,7 @@ class EvaluationResult(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    evaluation_run_id: Mapped[str] = mapped_column(
-        ForeignKey("evaluation_runs.id"), nullable=False
-    )
+    evaluation_run_id: Mapped[str] = mapped_column(ForeignKey("evaluation_runs.id"), nullable=False)
     case_id: Mapped[str] = mapped_column(ForeignKey("evaluation_cases.id"), nullable=False)
     incident_id: Mapped[str | None] = mapped_column(ForeignKey("incidents.id"), nullable=True)
     metrics: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)

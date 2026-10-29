@@ -74,6 +74,8 @@ jobs:
       # 真实模型验收测试（test_real_model.py）因无凭据自动跳过，见测试内 skipif 标记
       AGENT_PROVIDER: fake
       AGENT_MODEL_NAME: fake-diagnoser
+      # D6：内置 fake 模型需显式开启（生产默认关闭，避免静默降级为假模型）
+      AGENT_FAKE_PROVIDER_ENABLED: "true"
       # D4：CI 使用确定性 Fake Embedding + RAG off（真实 e5 验收单独执行，不进 CI）
       EMBEDDING_PROVIDER: fake
       RAG_MODE: off

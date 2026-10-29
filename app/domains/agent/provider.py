@@ -53,9 +53,7 @@ def build_chat_model(settings: Settings) -> ModelHandle:
             from app.domains.agent.fake import FakeDiagnoserChatModel  # noqa: PLC0415
 
             fake_model = FakeDiagnoserChatModel(model_name=settings.agent_model_name)
-            return ModelHandle(
-                fake_model, provider="fake", model_name=settings.agent_model_name
-            )
+            return ModelHandle(fake_model, provider="fake", model_name=settings.agent_model_name)
         raise ProviderNotConfigured(
             "provider 'fake' requires an injected model (tests/demo); "
             "configure AGENT_PROVIDER=anthropic|google|deepseek with credentials for real runs"

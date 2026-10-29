@@ -150,18 +150,15 @@ async def resume_pending_verifications(
     """
     settings = settings or get_settings()
     rows = (
-        (
-            await session.execute(
-                select(ActionExecution, Proposal)
-                .join(Proposal, Proposal.id == ActionExecution.proposal_id)
-                .where(
-                    ActionExecution.status == ActionExecutionStatus.SUCCEEDED,
-                    Proposal.status == ProposalStatus.EXECUTED,
-                )
+        await session.execute(
+            select(ActionExecution, Proposal)
+            .join(Proposal, Proposal.id == ActionExecution.proposal_id)
+            .where(
+                ActionExecution.status == ActionExecutionStatus.SUCCEEDED,
+                Proposal.status == ProposalStatus.EXECUTED,
             )
         )
-        .all()
-    )
+    ).all()
     results: list[dict[str, str]] = []
     for execution, proposal in rows:
         # 只读验证重入（幂等：已有结论时 verify_execution 内部跳过）

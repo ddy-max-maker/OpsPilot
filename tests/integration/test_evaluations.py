@@ -84,9 +84,7 @@ async def test_run_creation_requires_elevated_role(
     assert resp.status_code == 403
 
 
-async def _create_run(
-    client: httpx.AsyncClient, headers: dict[str, str], suite_id: str
-) -> str:
+async def _create_run(client: httpx.AsyncClient, headers: dict[str, str], suite_id: str) -> str:
     resp = await client.post(
         "/api/v1/evaluations/runs",
         json={"suite_id": suite_id, "wait": True, "note": "integration-test"},
@@ -110,13 +108,9 @@ def _failed_cases(detail: dict) -> list[str]:
     return [r["case_key"] for r in detail["results"] if not r["passed"]]
 
 
-async def test_fault_suite_full_run(
-    client: httpx.AsyncClient, ready: dict[str, str]
-) -> None:
+async def test_fault_suite_full_run(client: httpx.AsyncClient, ready: dict[str, str]) -> None:
     run_id = await _create_run(client, ready, "evs_fault_core")
-    detail = (
-        await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)
-    ).json()["data"]
+    detail = (await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)).json()["data"]
     assert detail["status"] == "completed"
     assert detail["suite_name"] == "fault-core"
     assert detail["summary"]["cases_total"] == 12
@@ -138,13 +132,9 @@ async def test_fault_suite_full_run(
     _assert_gates_zero(detail)
 
 
-async def test_security_suite_full_run(
-    client: httpx.AsyncClient, ready: dict[str, str]
-) -> None:
+async def test_security_suite_full_run(client: httpx.AsyncClient, ready: dict[str, str]) -> None:
     run_id = await _create_run(client, ready, "evs_security_gates")
-    detail = (
-        await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)
-    ).json()["data"]
+    detail = (await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)).json()["data"]
     assert detail["status"] == "completed"
     assert detail["summary"]["cases_total"] == 13
     assert _failed_cases(detail) == [], _failed_cases(detail)
@@ -152,13 +142,9 @@ async def test_security_suite_full_run(
     _assert_gates_zero(detail)
 
 
-async def test_reliability_suite_full_run(
-    client: httpx.AsyncClient, ready: dict[str, str]
-) -> None:
+async def test_reliability_suite_full_run(client: httpx.AsyncClient, ready: dict[str, str]) -> None:
     run_id = await _create_run(client, ready, "evs_reliability_recovery")
-    detail = (
-        await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)
-    ).json()["data"]
+    detail = (await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)).json()["data"]
     assert detail["status"] == "completed"
     assert detail["summary"]["cases_total"] == 8
     assert _failed_cases(detail) == [], _failed_cases(detail)
@@ -169,9 +155,7 @@ async def test_rag_ablation_suite_full_run(
     client: httpx.AsyncClient, ready: dict[str, str]
 ) -> None:
     run_id = await _create_run(client, ready, "evs_rag_ablation")
-    detail = (
-        await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)
-    ).json()["data"]
+    detail = (await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)).json()["data"]
     assert detail["status"] == "completed"
     assert detail["summary"]["cases_total"] == 6
     assert _failed_cases(detail) == [], _failed_cases(detail)
@@ -180,14 +164,10 @@ async def test_rag_ablation_suite_full_run(
     _assert_gates_zero(detail)
 
 
-async def test_holdout_flag_persisted(
-    client: httpx.AsyncClient, ready: dict[str, str]
-) -> None:
+async def test_holdout_flag_persisted(client: httpx.AsyncClient, ready: dict[str, str]) -> None:
     """保留集标记持久化且结果可按 holdout 区分（保留集不得用于针对性调优）。"""
     run_id = await _create_run(client, ready, "evs_fault_core")
-    detail = (
-        await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)
-    ).json()["data"]
+    detail = (await client.get(f"/api/v1/evaluations/runs/{run_id}", headers=ready)).json()["data"]
     holdout_results = [r for r in detail["results"] if r["holdout"]]
     dev_results = [r for r in detail["results"] if not r["holdout"]]
     assert holdout_results, "holdout cases must exist in results"

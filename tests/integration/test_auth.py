@@ -1,4 +1,4 @@
-﻿"""认证 API 集成测试：登录成败、首登改密、Token 校验、/auth/me。"""
+"""认证 API 集成测试：登录成败、首登改密、Token 校验、/auth/me。"""
 
 from __future__ import annotations
 
@@ -245,4 +245,3 @@ async def test_unknown_route_envelope(client: httpx.AsyncClient, path: str, meth
     resp = await client.request(method, "/api/v1/__not_exist__")
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "NOT_FOUND"
-
